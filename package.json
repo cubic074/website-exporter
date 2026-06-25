@@ -1,0 +1,22 @@
+{
+  "name": "static-site-dependency-mirror",
+  "version": "1.0.0",
+  "description": "Recursively download and rewrite static dependencies referenced by a web page.",
+  "type": "module",
+  "bin": {
+    "site-mirror": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "cheerio": "^1.1.2",
+    "es-module-lexer": "^1.7.0",
+    "postcss": "^8.5.6",
+    "postcss-value-parser": "^4.2.0"
+  }
+}
