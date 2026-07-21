@@ -276,8 +276,11 @@ export async function mirrorSite(entryUrls, options = {}) {
         const source = record.body.toString("utf8");
         const rewrite = (dependencyUrl) => dependencyUrl;
         let result;
-        if (record.kind === "html")
-          result = await processHtml(source, record.finalUrl, rewrite);
+        if (record.kind === "html") {
+          result = await processHtml(source, record.finalUrl, rewrite, {
+            discoverNavigation: true,
+          });
+        }
         if (record.kind === "css")
           result = await processCss(source, record.finalUrl, rewrite);
         if (record.kind === "javascript")

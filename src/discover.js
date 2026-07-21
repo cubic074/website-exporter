@@ -23,6 +23,11 @@ const JAVASCRIPT_SCRIPT_TYPES = new Set([
   "text/ecmascript",
 ]);
 
+const HTML_NAVIGATION_ATTRIBUTES = [
+  ["a[href]", "href"],
+  ["area[href]", "href"],
+];
+
 function resolveReference(raw, baseUrl) {
   if (!raw || raw.startsWith("#")) return null;
   try {
@@ -189,16 +194,14 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
   }
 
   const rewriteNavigation = options.rewriteNavigation;
-  if (rewriteNavigation) {
-    for (const [selector, attribute] of [
-      ["a[href]", "href"],
-      ["area[href]", "href"],
-      ["form[action]", "action"],
-    ]) {
+  if (options.discoverNavigation || rewriteNavigation) {
+    for (const [selector, attribute] of HTML_NAVIGATION_ATTRIBUTES) {
       $(selector).each((_, element) => {
         const raw = $(element).attr(attribute);
         const resolved = resolveReference(raw, baseUrl);
         if (!resolved) return;
+        if (options.discoverNavigation) dependencies.push(resolved);
+        if (!rewriteNavigation) return;
         const replacement = rewriteResolvedReference(
           raw,
           baseUrl,
@@ -208,6 +211,21 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
         if (replacement) $(element).attr(attribute, replacement);
       });
     }
+  }
+
+  if (rewriteNavigation) {
+    $("form[action]").each((_, element) => {
+      const raw = $(element).attr("action");
+      const resolved = resolveReference(raw, baseUrl);
+      if (!resolved) return;
+      const replacement = rewriteResolvedReference(
+        raw,
+        baseUrl,
+        resolved,
+        (url) => rewriteNavigation(url, raw),
+      );
+      if (replacement) $(element).attr("action", replacement);
+    });
   }
 
   $("base").remove();

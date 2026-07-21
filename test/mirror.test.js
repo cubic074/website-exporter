@@ -87,15 +87,12 @@ test("end-to-end crawl downloads recursively, rewrites, deduplicates, and manife
   const output = await fs.mkdtemp(path.join(os.tmpdir(), "site-mirror-"));
   t.after(() => fs.rm(output, { recursive: true, force: true }));
 
-  const result = await mirrorSite(
-    [fixture.url, new URL("/second", fixture.url).href],
-    {
-      output,
-      allowPrivate: true,
-      concurrency: 3,
-      headers: { cookie: "session=allowed", "x-export": "yes" },
-    },
-  );
+  const result = await mirrorSite(fixture.url, {
+    output,
+    allowPrivate: true,
+    concurrency: 3,
+    headers: { cookie: "session=allowed", "x-export": "yes" },
+  });
 
   assert.equal(result.summary.downloaded, 13);
   assert.equal(result.summary.failed, 0);
@@ -133,7 +130,12 @@ test("end-to-end crawl downloads recursively, rewrites, deduplicates, and manife
     (item) => item.duplicateOf,
   );
   assert.equal(duplicateRecords.length, 1);
-  assert.equal(result.manifest.entryUrls.length, 2);
+  assert.equal(result.manifest.entryUrls.length, 1);
+  const linkedPage = result.manifest.resources.find((item) =>
+    item.originalUrl.endsWith("/second"),
+  );
+  assert.equal(linkedPage.status, "downloaded");
+  assert.equal(linkedPage.isEntry, false);
   assert.equal(result.manifest.resources.length, 13);
   await assert.rejects(
     fs.stat(path.join(result.rootDir, new URL(fixture.url).host)),

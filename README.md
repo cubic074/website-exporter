@@ -63,6 +63,7 @@ The entry domain is the root directory inside `mirror`. Query strings receive a 
 
 ## What is discovered
 
+- Same-origin HTML links in `<a>` and `<area>` elements
 - HTML scripts, stylesheets, module preloads, preloads, icons, images, sources, posters, and `srcset`
 - URLs in inline `style` attributes and `<style>` elements
 - Imports in inline module scripts
@@ -71,7 +72,7 @@ The entry domain is the root directory inside `mirror`. Query strings receive a 
 - Literal JavaScript `fetch(...)`, `axios.get(...)`, GET/HEAD `XMLHttpRequest.open(...)`, `new URL(...)`, and Worker resource URLs
 - JavaScript source-map comments
 
-Ordinary links and forms do not expand the crawl. When they point to another supplied entry page they are rewritten to that local page; otherwise they continue to point to the live URL. Dynamically constructed JavaScript URLs, non-GET API behavior, WebSocket traffic, and browser-generated requests cannot be exported reliably and are left alone.
+Same-origin links recursively expand the crawl and are rewritten to their downloaded targets. External links remain live and are not requested. Form actions are never submitted or used to expand the crawl; they are only rewritten when their target was downloaded through another route. Dynamically constructed JavaScript URLs, non-GET API behavior, WebSocket traffic, and browser-generated requests cannot be exported reliably and are left alone.
 
 ## Programmatic use
 

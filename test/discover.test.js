@@ -117,3 +117,19 @@ test("HTML can rewrite navigation without crawling it as a dependency", async ()
   assert.match(result.content, /action="NAV:\/pages\/submit"/);
   assert.doesNotMatch(result.content, /<base/);
 });
+
+test("HTML discovers links recursively without following form submissions", async () => {
+  const result = await processHtml(
+    `<a href="/next#part">Next</a><area href="child"><form action="/submit"></form>`,
+    "https://example.com/start",
+    rewrite,
+    { discoverNavigation: true },
+  );
+
+  assert.deepEqual(
+    new Set(result.dependencies),
+    new Set(["https://example.com/next", "https://example.com/child"]),
+  );
+  assert.match(result.content, /href="\/next#part"/);
+  assert.match(result.content, /action="\/submit"/);
+});
