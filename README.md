@@ -40,10 +40,7 @@ Options:
 Example:
 
 ```sh
-node src/cli.js https://drawaria.online/ https://drawaria.online/modpanel https://drawaria.online/gallery https://drawaria.online/scoreboards https://drawaria.online/event https://drawaria.online/test https://drawaria.online/login https://drawaria.online/terms https://drawaria.online/privacy \
-  --output ./downloads \
-  --concurrency 12 \
-  --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
+node src/cli.js https://drawaria.online/ https://drawaria.online/test https://drawaria.online/login https://drawaria.online/event https://drawaria.online/links https://drawaria.online/terms https://drawaria.online/rules https://drawaria.online/room/ https://drawaria.online/stencil https://drawaria.online/auth/vk https://drawaria.online/privacy https://drawaria.online/gallery https://drawaria.online/palettes https://drawaria.online/auth/google https://drawaria.online/auth/reddit https://drawaria.online/gallery/hot https://drawaria.online/gallery/new https://drawaria.online/gallery/top https://drawaria.online/scoreboards/ https://drawaria.online/auth/discord https://drawaria.online/gallery/img/ https://drawaria.online/auth/facebook https://drawaria.online/gallery/picks https://drawaria.online/avatar/builder https://drawaria.online/scoreboards/mostwins https://drawaria.online/scoreboards/mostscore https://drawaria.online/scoreboards/moststars https://drawaria.online/scoreboards/mostscore/day https://drawaria.online/scoreboards/mostscore/year https://drawaria.online/scoreboards/mostscore/month https://drawaria.online/scoreboards/mostscore/alltime https://drawaria.online/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 --output ./mirror --concurrency 12 --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
 ```
 
 All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
@@ -74,6 +71,8 @@ The entry domain is the root directory inside `mirror`. Query strings receive a 
 
 Same-origin links recursively expand the crawl and are rewritten to their downloaded targets. External links remain live and are not requested. Form actions are never submitted or used to expand the crawl; they are only rewritten when their target was downloaded through another route. Dynamically constructed JavaScript URLs, non-GET API behavior, WebSocket traffic, and browser-generated requests cannot be exported reliably and are left alone.
 
+Query-bearing navigation is entry-list controlled. A URL containing `?` is followed from an `<a>` or `<area>` only when that exact URL was supplied as an entry point. This prevents a user gallery, profile, or friends page from recursively crawling the same route for every linked user ID. Ignored URLs are listed under `ignoredNavigationUrls` in the manifest. Query strings on static assets and discovered API/resource calls are unaffected by this rule.
+
 ## Programmatic use
 
 ```js
@@ -91,7 +90,9 @@ await mirrorSite(["https://example.com/", "https://example.com/account"], {
 
 ## Deduplication and manifest
 
-URLs are normalized and queued once per run. Every downloaded response and final output receives a SHA-256 fingerprint in `mirror-manifest.json`. Distinct URLs with byte-identical final output are stored as hard links when the filesystem supports them, with `duplicateOf` identifying the first resource. A normal file is written as a portable fallback when hard links are unavailable. `sourceDuplicateOf` also records identical response bodies whose rewritten outputs differ.
+URLs are normalized and queued once per run. An explicitly listed query-bearing HTML page is consolidated into a generic query-free page when it is the sole representative for that pathname, or when its other downloaded variants have byte-identical content. For example, an entry point `/gallery/?uid=...` is stored and rewritten as `gallery/index.html`, ready for a later script to populate manually. A distinct `/gallery` page remains separate as `gallery.html`; trailing-slash path identity is preserved. Original query source URLs remain manifest records, marked with `genericQueryPage` and `queryCanonicalOf`. If multiple explicitly listed variants return different HTML bodies, they retain distinct query-hashed paths.
+
+Every downloaded response and final output receives a SHA-256 fingerprint in `mirror-manifest.json`. Other distinct URLs with byte-identical final output may share storage through hard links. `duplicateOf` identifies the first resource. A normal file is written as a portable fallback when hard links are unavailable. `sourceDuplicateOf` also records identical response bodies whose rewritten outputs differ.
 
 The manifest lists skipped external URLs under `externalUrls`; request headers and their values are never written to it.
 

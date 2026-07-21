@@ -16,6 +16,14 @@ test("infers extensions and handles directory URLs", () => {
     localPathForUrl("https://example.com/app", "text/javascript"),
     "app.js",
   );
+  assert.equal(
+    localPathForUrl("https://example.com/gallery", "text/html"),
+    "gallery.html",
+  );
+  assert.equal(
+    localPathForUrl("https://example.com/gallery/", "text/html"),
+    path.join("gallery", "index.html"),
+  );
 });
 
 test("encoded path separators cannot escape a URL path segment", () => {

@@ -217,6 +217,81 @@ test("refreshing one previously deduplicated file does not mutate stale hard lin
   );
 });
 
+test("an explicit profile sample becomes generic without crawling other user ids", async (t) => {
+  const firstUid = "c998b5a0-a8da-11ef-acaf-250da20bac69";
+  const secondUid = "7a751a30-cf9b-11ef-acaf-250da20bac69";
+  const hits = new Map();
+  const sharedPage = `<script>document.body.dataset.uid = new URLSearchParams(location.search).get("uid")</script>`;
+  const server = http.createServer((request, response) => {
+    hits.set(request.url, (hits.get(request.url) || 0) + 1);
+    if (request.url === "/") {
+      response
+        .writeHead(200, { "content-type": "text/html" })
+        .end(`<a href="/gallery">Gallery landing</a><a href="/gallery/?uid=${firstUid}">First</a><a href="/gallery/?uid=${secondUid}">Second</a>`);
+      return;
+    }
+    if (request.url === "/gallery") {
+      response
+        .writeHead(200, { "content-type": "text/html" })
+        .end(`<h1>Different gallery landing page</h1>`);
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html" }).end(sharedPage);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const output = await fs.mkdtemp(path.join(os.tmpdir(), "site-mirror-"));
+  t.after(() => fs.rm(output, { recursive: true, force: true }));
+
+  const entryUrl = `http://127.0.0.1:${port}/`;
+  const firstProfileUrl = new URL(
+    `/gallery/?uid=${firstUid}`,
+    entryUrl,
+  ).href;
+  const secondProfileUrl = new URL(
+    `/gallery/?uid=${secondUid}`,
+    entryUrl,
+  ).href;
+  const result = await mirrorSite([entryUrl, firstProfileUrl], {
+    output,
+    allowPrivate: true,
+  });
+
+  assert.equal(hits.get(`/gallery/?uid=${firstUid}`), 1);
+  assert.equal(hits.get(`/gallery/?uid=${secondUid}`), undefined);
+  assert.equal(result.summary.ignoredNavigation, 1);
+  assert.deepEqual(result.manifest.ignoredNavigationUrls, [secondProfileUrl]);
+  const variants = result.manifest.resources.filter((item) =>
+    item.originalUrl.includes("/gallery/?uid="),
+  );
+  assert.equal(variants.length, 1);
+  assert.ok(
+    variants.every((item) => item.localPath === "gallery/index.html"),
+  );
+  assert.ok(
+    variants.every((item) => item.localReference === "gallery/index.html"),
+  );
+  assert.ok(variants.every((item) => item.genericQueryPage));
+  assert.equal(new Set(variants.map((item) => item.queryCanonicalOf)).size, 1);
+  assert.equal(variants[0].originalUrl, firstProfileUrl);
+  const galleryLanding = result.manifest.resources.find(
+    (item) => new URL(item.originalUrl).pathname === "/gallery",
+  );
+  assert.equal(galleryLanding.localPath, "gallery.html");
+  assert.equal(galleryLanding.genericQueryPage, false);
+  assert.notEqual(galleryLanding.contentSha256, variants[0].contentSha256);
+
+  const entry = result.manifest.resources.find((item) => item.isEntry);
+  const html = await fs.readFile(path.join(result.rootDir, entry.localPath), "utf8");
+  assert.equal(
+    html.match(/href="\.\/gallery\/index\.html"/g)?.length,
+    2,
+  );
+  await fs.access(path.join(result.rootDir, "gallery", "index.html"));
+  await fs.access(path.join(result.rootDir, "gallery.html"));
+});
+
 test("entry private-network targets are blocked by default", async () => {
   await assert.rejects(
     mirrorSite("http://127.0.0.1:1/", {

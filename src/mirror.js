@@ -117,10 +117,17 @@ function withUrlSuffix(relativePath, url, attempt = 0) {
 }
 
 function publicRecord(record) {
+  const localPath = record.localPath
+    ? record.localPath.split(path.sep).join("/")
+    : null;
+  const localReference = localPath
+    ? `${localPath}${record.genericQueryPage ? "" : new URL(record.originalUrl).search}`
+    : null;
   return {
     originalUrl: record.originalUrl,
     finalUrl: record.finalUrl,
-    localPath: record.localPath,
+    localPath,
+    localReference,
     contentType: record.contentType,
     status: record.status,
     httpStatus: record.httpStatus,
@@ -131,6 +138,8 @@ function publicRecord(record) {
     outputSha256: record.outputSha256,
     sourceDuplicateOf: record.sourceDuplicateOf,
     duplicateOf: record.duplicateOf,
+    genericQueryPage: Boolean(record.genericQueryPage),
+    queryCanonicalOf: record.queryCanonicalOf,
     error: record.error,
   };
 }
@@ -161,6 +170,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     }
   };
   const crawlOrigin = entries[0].origin;
+  const entryUrlSet = new Set(entries.map((entry) => entry.href));
   const headers = createRequestHeaders(options.headers);
   const rootDir = path.join(output, hostDirectory(entries[0]));
   const manifestPath = path.join(rootDir, MANIFEST_FILENAME);
@@ -168,6 +178,7 @@ export async function mirrorSite(entryUrls, options = {}) {
   const records = [];
   const recordsByUrl = new Map();
   const externalUrls = new Set();
+  const ignoredNavigationUrls = new Set();
   const claimedPaths = new Set([MANIFEST_FILENAME.toLowerCase()]);
   const sourceContentOwners = new Map();
   const summary = {
@@ -175,6 +186,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     skipped: 0,
     deduplicated: 0,
     external: 0,
+    ignoredNavigation: 0,
     failed: 0,
   };
   let active = 0;
@@ -235,6 +247,8 @@ export async function mirrorSite(entryUrls, options = {}) {
       outputSha256: null,
       sourceDuplicateOf: null,
       duplicateOf: null,
+      genericQueryPage: false,
+      queryCanonicalOf: null,
       error: null,
     };
     records.push(record);
@@ -242,6 +256,27 @@ export async function mirrorSite(entryUrls, options = {}) {
     queue.push({ url: normalized, record });
     if (started) pump();
     return record;
+  }
+
+  function enqueueNavigation(url, parentUrl) {
+    let normalized;
+    try {
+      normalized = normalizeUrl(url);
+    } catch {
+      return null;
+    }
+    const parsed = new URL(normalized);
+    if (
+      parsed.origin === crawlOrigin &&
+      parsed.search &&
+      !entryUrlSet.has(normalized) &&
+      !recordsByUrl.has(normalized)
+    ) {
+      ignoredNavigationUrls.add(normalized);
+      summary.ignoredNavigation = ignoredNavigationUrls.size;
+      return null;
+    }
+    return enqueue(normalized, parentUrl);
   }
 
   async function processJob(job) {
@@ -286,6 +321,9 @@ export async function mirrorSite(entryUrls, options = {}) {
         if (record.kind === "javascript")
           result = await processJavaScript(source, record.finalUrl, rewrite);
         for (const dependency of result.dependencies) enqueue(dependency, url);
+        for (const navigation of result.navigationDependencies || []) {
+          enqueueNavigation(navigation, url);
+        }
       }
 
       const sourceOwner = sourceContentOwners.get(record.contentSha256);
@@ -320,28 +358,98 @@ export async function mirrorSite(entryUrls, options = {}) {
   pump();
   await complete;
 
+  const queryPageGroups = new Map();
+  for (const record of records) {
+    if (record.status !== "downloaded" || record.kind !== "html") continue;
+    const url = new URL(record.finalUrl);
+    const key = `${url.origin}${url.pathname}`;
+    const group = queryPageGroups.get(key) || [];
+    group.push(record);
+    queryPageGroups.set(key, group);
+  }
+
+  const genericQueryPagesByPath = new Map();
+  for (const group of queryPageGroups.values()) {
+    const queryVariants = group.filter(
+      (record) => new URL(record.finalUrl).search,
+    );
+    if (!queryVariants.some((record) => record.isEntry)) continue;
+    if (new Set(group.map((record) => record.contentSha256)).size !== 1)
+      continue;
+
+    const owner = group[0];
+    const pathSource =
+      group.find((record) => !new URL(record.finalUrl).search) || owner;
+    const genericUrl = new URL(pathSource.finalUrl);
+    genericUrl.search = "";
+    const genericPath = localPathForUrl(genericUrl, owner.contentType);
+    const genericPathKey = genericPath
+      .split(path.sep)
+      .join("/")
+      .toLowerCase();
+    const groupPathKeys = new Set(
+      group.map((record) =>
+        record.localPath.split(path.sep).join("/").toLowerCase(),
+      ),
+    );
+    if (claimedPaths.has(genericPathKey) && !groupPathKeys.has(genericPathKey))
+      continue;
+
+    claimedPaths.add(genericPathKey);
+    for (const record of group) {
+      record.localPath = genericPath;
+      record.absolutePath = path.join(rootDir, genericPath);
+      record.genericQueryPage = true;
+      record.genericQueryOwner = owner;
+      record.queryCanonicalOf = owner.originalUrl;
+    }
+    genericQueryPagesByPath.set(
+      `${genericUrl.origin}${genericUrl.pathname}`,
+      owner,
+    );
+  }
+
   for (const record of records) {
     if (record.status !== "downloaded") continue;
+    if (record.genericQueryOwner && record.genericQueryOwner !== record) {
+      record.outputBody = record.genericQueryOwner.outputBody;
+      record.outputSha256 = record.genericQueryOwner.outputSha256;
+      continue;
+    }
     let outputBody = record.body;
     if (record.kind !== "binary") {
       const source = record.body.toString("utf8");
-      const rewrite = (dependencyUrl) => {
+      const rewriteTarget = (dependencyUrl, allowGenericQueryPage = false) => {
         let normalized;
         try {
           normalized = normalizeUrl(dependencyUrl);
         } catch {
           return dependencyUrl;
         }
-        if (new URL(normalized).origin !== crawlOrigin) return dependencyUrl;
-        const target = recordsByUrl.get(normalized);
+        const url = new URL(normalized);
+        if (url.origin !== crawlOrigin) return dependencyUrl;
+        let target = recordsByUrl.get(normalized);
+        if (
+          (!target || target.status !== "downloaded") &&
+          allowGenericQueryPage &&
+          url.search
+        ) {
+          target = genericQueryPagesByPath.get(`${url.origin}${url.pathname}`);
+        }
         if (!target?.localPath || target.status !== "downloaded")
           return dependencyUrl;
-        return relativeReference(record.localPath, target.localPath);
+        const query = target.genericQueryPage
+          ? ""
+          : url.search;
+        return `${relativeReference(record.localPath, target.localPath)}${query}`;
       };
+      const rewrite = (dependencyUrl) => rewriteTarget(dependencyUrl);
+      const rewriteNavigation = (dependencyUrl) =>
+        rewriteTarget(dependencyUrl, true);
       let result;
       if (record.kind === "html") {
         result = await processHtml(source, record.finalUrl, rewrite, {
-          rewriteNavigation: rewrite,
+          rewriteNavigation,
         });
       }
       if (record.kind === "css")
@@ -366,6 +474,11 @@ export async function mirrorSite(entryUrls, options = {}) {
       outputOwners.set(record.outputSha256, record);
     }
 
+    if (owner?.absolutePath === record.absolutePath) {
+      log(`[DEDUPED] ${record.localPath.split(path.sep).join("/")}`);
+      continue;
+    }
+
     await fs.mkdir(path.dirname(record.absolutePath), { recursive: true });
     await unlinkIfExists(record.absolutePath);
     if (!owner) {
@@ -388,6 +501,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     createdAt: new Date().toISOString(),
     summary,
     externalUrls: [...externalUrls],
+    ignoredNavigationUrls: [...ignoredNavigationUrls],
     resources: records.map(publicRecord),
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);

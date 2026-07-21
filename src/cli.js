@@ -101,6 +101,7 @@ async function main() {
         `${result.summary.skipped} URL duplicates skipped, ` +
         `${result.summary.deduplicated} content duplicates, ` +
         `${result.summary.external} external ignored, ` +
+        `${result.summary.ignoredNavigation} query links ignored, ` +
         `${result.summary.failed} failed\n` +
         `Mirror: ${result.rootDir}\n` +
         `Manifest: ${result.manifestPath}\n`,

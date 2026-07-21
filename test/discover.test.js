@@ -126,8 +126,9 @@ test("HTML discovers links recursively without following form submissions", asyn
     { discoverNavigation: true },
   );
 
+  assert.deepEqual(result.dependencies, []);
   assert.deepEqual(
-    new Set(result.dependencies),
+    new Set(result.navigationDependencies),
     new Set(["https://example.com/next", "https://example.com/child"]),
   );
   assert.match(result.content, /href="\/next#part"/);

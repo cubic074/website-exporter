@@ -148,6 +148,7 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
   const baseHref = $("base[href]").first().attr("href");
   const baseUrl = baseHref ? new URL(baseHref, responseUrl).href : responseUrl;
   const dependencies = [];
+  const navigationDependencies = [];
   const add = (raw, base = baseUrl) => {
     const resolved = resolveReference(raw, base);
     if (!resolved) return null;
@@ -200,7 +201,7 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
         const raw = $(element).attr(attribute);
         const resolved = resolveReference(raw, baseUrl);
         if (!resolved) return;
-        if (options.discoverNavigation) dependencies.push(resolved);
+        if (options.discoverNavigation) navigationDependencies.push(resolved);
         if (!rewriteNavigation) return;
         const replacement = rewriteResolvedReference(
           raw,
@@ -229,7 +230,11 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
   }
 
   $("base").remove();
-  return { content: $.html(), dependencies: [...new Set(dependencies)] };
+  return {
+    content: $.html(),
+    dependencies: [...new Set(dependencies)],
+    navigationDependencies: [...new Set(navigationDependencies)],
+  };
 }
 
 function processCssValue(value, baseUrl, addReference) {
