@@ -17,15 +17,18 @@ test("HTML discovers supported assets, base URLs, srcset, and inline content", a
   </body></html>`;
   const result = await processHtml(source, "https://example.com/page", rewrite);
 
-  assert.deepEqual(new Set(result.dependencies), new Set([
-    "https://cdn.example/site.css",
-    "https://example.com/assets/image.png",
-    "https://example.com/assets/small.png",
-    "https://example.com/assets/large.png",
-    "https://example.com/assets/hero.png",
-    "https://example.com/assets/inline.js",
-    "https://example.com/api/data"
-  ]));
+  assert.deepEqual(
+    new Set(result.dependencies),
+    new Set([
+      "https://cdn.example/site.css",
+      "https://example.com/assets/image.png",
+      "https://example.com/assets/small.png",
+      "https://example.com/assets/large.png",
+      "https://example.com/assets/hero.png",
+      "https://example.com/assets/inline.js",
+      "https://example.com/api/data",
+    ]),
+  );
   assert.match(result.content, /LOCAL:\/site\.css#theme/);
   assert.match(result.content, /href="\/ignored"/);
   assert.doesNotMatch(result.content, /<base/);
@@ -35,12 +38,15 @@ test("CSS discovers imports and URLs", async () => {
   const result = await processCss(
     `@import "./theme.css"; .x{background:url('../img/a.png')}`,
     "https://example.com/css/main.css",
-    rewrite
+    rewrite,
   );
-  assert.deepEqual(new Set(result.dependencies), new Set([
-    "https://example.com/css/theme.css",
-    "https://example.com/img/a.png"
-  ]));
+  assert.deepEqual(
+    new Set(result.dependencies),
+    new Set([
+      "https://example.com/css/theme.css",
+      "https://example.com/img/a.png",
+    ]),
+  );
   assert.match(result.content, /LOCAL:\/css\/theme\.css/);
 });
 
@@ -48,13 +54,20 @@ test("JavaScript discovers static imports, literal dynamic imports, and source m
   const source = `import x from "./x.js"; export * from "./y.js";
     import("./lazy.js"); import(variable);
     //# sourceMappingURL=app.js.map`;
-  const result = await processJavaScript(source, "https://example.com/js/app.js", rewrite);
-  assert.deepEqual(new Set(result.dependencies), new Set([
-    "https://example.com/js/x.js",
-    "https://example.com/js/y.js",
-    "https://example.com/js/lazy.js",
-    "https://example.com/js/app.js.map"
-  ]));
+  const result = await processJavaScript(
+    source,
+    "https://example.com/js/app.js",
+    rewrite,
+  );
+  assert.deepEqual(
+    new Set(result.dependencies),
+    new Set([
+      "https://example.com/js/x.js",
+      "https://example.com/js/y.js",
+      "https://example.com/js/lazy.js",
+      "https://example.com/js/app.js.map",
+    ]),
+  );
   assert.match(result.content, /LOCAL:\/js\/x\.js/);
   assert.match(result.content, /import\(variable\)/);
 });
@@ -69,15 +82,22 @@ test("JavaScript discovers and rewrites literal API and resource calls", async (
     fetch(variable);
     fetch("https://outside.example/data");
   `;
-  const result = await processJavaScript(source, "https://example.com/js/app.js", rewrite);
+  const result = await processJavaScript(
+    source,
+    "https://example.com/js/app.js",
+    rewrite,
+  );
 
-  assert.deepEqual(new Set(result.dependencies), new Set([
-    "https://example.com/api/fetch",
-    "https://example.com/api/axios",
-    "https://example.com/api/xhr",
-    "https://example.com/images/runtime.png",
-    "https://outside.example/data"
-  ]));
+  assert.deepEqual(
+    new Set(result.dependencies),
+    new Set([
+      "https://example.com/api/fetch",
+      "https://example.com/api/axios",
+      "https://example.com/api/xhr",
+      "https://example.com/images/runtime.png",
+      "https://outside.example/data",
+    ]),
+  );
   assert.match(result.content, /fetch\("LOCAL:\/api\/fetch"\)/);
   assert.match(result.content, /open\('GET', "LOCAL:\/api\/xhr"\)/);
   assert.match(result.content, /window\.open\("\/page", "_blank"\)/);
@@ -89,7 +109,7 @@ test("HTML can rewrite navigation without crawling it as a dependency", async ()
     `<base href="/pages/"><a href="next#part">Next</a><form action="submit"></form>`,
     "https://example.com/start",
     rewrite,
-    { rewriteNavigation: (url) => `NAV:${new URL(url).pathname}` }
+    { rewriteNavigation: (url) => `NAV:${new URL(url).pathname}` },
   );
 
   assert.deepEqual(result.dependencies, []);

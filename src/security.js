@@ -3,7 +3,8 @@ import net from "node:net";
 
 function isPrivateIPv4(address) {
   const parts = address.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) return false;
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part)))
+    return false;
   const [a, b] = parts;
   return (
     a === 0 ||
@@ -55,7 +56,10 @@ export async function assertSafeUrl(input, allowPrivate = false) {
   const addresses = net.isIP(hostname)
     ? [{ address: hostname }]
     : await dns.lookup(hostname, { all: true, verbatim: true });
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
+  if (
+    addresses.length === 0 ||
+    addresses.some(({ address }) => isPrivateAddress(address))
+  ) {
     throw new Error(`Private-network target blocked: ${hostname}`);
   }
   return url;

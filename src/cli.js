@@ -22,7 +22,7 @@ export function parseArgs(argv) {
     output: "mirror",
     concurrency: 8,
     allowPrivate: false,
-    headers: []
+    headers: [],
   };
   const entryUrls = [];
 
@@ -65,7 +65,8 @@ export function parseArgs(argv) {
     entryUrls.push(arg);
   }
 
-  if (entryUrls.length === 0) throw new Error("At least one entry URL is required");
+  if (entryUrls.length === 0)
+    throw new Error("At least one entry URL is required");
   const parsedEntries = entryUrls.map((entryUrl) => new URL(entryUrl));
   for (const parsed of parsedEntries) {
     if (!["http:", "https:"].includes(parsed.protocol)) {
@@ -78,7 +79,7 @@ export function parseArgs(argv) {
     entryUrl: parsedEntries[0].href,
     entryUrls: parsedEntries.map((entry) => entry.href),
     options,
-    help: false
+    help: false,
   };
 }
 
@@ -92,17 +93,17 @@ async function main() {
 
     const result = await mirrorSite(parsed.entryUrls, {
       ...parsed.options,
-      logger: (message) => process.stdout.write(`${message}\n`)
+      logger: (message) => process.stdout.write(`${message}\n`),
     });
 
     process.stdout.write(
       `Done: ${result.summary.downloaded} downloaded, ` +
-      `${result.summary.skipped} URL duplicates skipped, ` +
-      `${result.summary.deduplicated} content duplicates, ` +
-      `${result.summary.external} external ignored, ` +
-      `${result.summary.failed} failed\n` +
-      `Mirror: ${result.rootDir}\n` +
-      `Manifest: ${result.manifestPath}\n`
+        `${result.summary.skipped} URL duplicates skipped, ` +
+        `${result.summary.deduplicated} content duplicates, ` +
+        `${result.summary.external} external ignored, ` +
+        `${result.summary.failed} failed\n` +
+        `Mirror: ${result.rootDir}\n` +
+        `Manifest: ${result.manifestPath}\n`,
     );
   } catch (error) {
     process.stderr.write(`Error: ${error.message}\n\n${usage()}`);
@@ -110,6 +111,9 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   await main();
 }

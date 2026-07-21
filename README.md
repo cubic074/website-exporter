@@ -40,11 +40,10 @@ Options:
 Example:
 
 ```sh
-node src/cli.js https://example.com/ https://example.com/about \
+node src/cli.js https://drawaria.online/ https://drawaria.online/modpanel https://drawaria.online/gallery https://drawaria.online/scoreboards https://drawaria.online/event https://drawaria.online/test https://drawaria.online/login https://drawaria.online/terms https://drawaria.online/privacy \
   --output ./downloads \
   --concurrency 12 \
-  --header "Cookie: session=your-session-cookie" \
-  --header "X-Access-Key: your-key"
+  --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
 ```
 
 All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
@@ -79,14 +78,11 @@ Ordinary links and forms do not expand the crawl. When they point to another sup
 ```js
 import { mirrorSite } from "./src/mirror.js";
 
-await mirrorSite([
-  "https://example.com/",
-  "https://example.com/account"
-], {
+await mirrorSite(["https://example.com/", "https://example.com/account"], {
   output: "./mirror",
   headers: {
-    Cookie: "session=your-session-cookie"
-  }
+    Cookie: "session=your-session-cookie",
+  },
 });
 ```
 

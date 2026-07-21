@@ -17,7 +17,7 @@ const MIME_EXTENSIONS = new Map([
   ["font/woff", ".woff"],
   ["font/woff2", ".woff2"],
   ["application/font-woff", ".woff"],
-  ["application/pdf", ".pdf"]
+  ["application/pdf", ".pdf"],
 ]);
 
 function safeSegment(segment) {
@@ -28,8 +28,11 @@ function safeSegment(segment) {
       return segment;
     }
   })();
-  const safe = decoded.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/[. ]+$/g, "");
-  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(safe)) return `_${safe}`;
+  const safe = decoded
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
+    .replace(/[. ]+$/g, "");
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(safe))
+    return `_${safe}`;
   return safe || "_";
 }
 
@@ -59,7 +62,11 @@ export function localPathForUrl(input, contentType = "") {
   }
 
   if (url.search) {
-    const hash = crypto.createHash("sha256").update(url.search).digest("hex").slice(0, 10);
+    const hash = crypto
+      .createHash("sha256")
+      .update(url.search)
+      .digest("hex")
+      .slice(0, 10);
     const ext = path.extname(filename);
     filename = `${filename.slice(0, ext ? -ext.length : undefined)}.__q_${hash}${ext}`;
   }
@@ -68,7 +75,10 @@ export function localPathForUrl(input, contentType = "") {
 }
 
 export function relativeReference(fromFile, toFile) {
-  let relative = path.relative(path.dirname(fromFile), toFile).split(path.sep).join("/");
+  let relative = path
+    .relative(path.dirname(fromFile), toFile)
+    .split(path.sep)
+    .join("/");
   if (!relative.startsWith(".")) relative = `./${relative}`;
   return relative;
 }

@@ -11,7 +11,7 @@ const HTML_ATTRIBUTES = [
   ["link[rel~='icon'][href]", "href"],
   ["img[src]", "src"],
   ["source[src]", "src"],
-  ["video[poster]", "poster"]
+  ["video[poster]", "poster"],
 ];
 
 const JAVASCRIPT_SCRIPT_TYPES = new Set([
@@ -20,7 +20,7 @@ const JAVASCRIPT_SCRIPT_TYPES = new Set([
   "text/javascript",
   "application/javascript",
   "application/ecmascript",
-  "text/ecmascript"
+  "text/ecmascript",
 ]);
 
 function resolveReference(raw, baseUrl) {
@@ -49,15 +49,26 @@ function rewriteResolvedReference(raw, baseUrl, resolved, rewrite) {
 }
 
 function decodeJavaScriptString(raw) {
-  return raw.replace(/\\(u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|\r?\n|.)/gs,
+  return raw.replace(
+    /\\(u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|\r?\n|.)/gs,
     (_, escape, codePoint, unicode, hex, character) => {
-      if (codePoint) return String.fromCodePoint(Number.parseInt(codePoint, 16));
+      if (codePoint)
+        return String.fromCodePoint(Number.parseInt(codePoint, 16));
       if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
       if (hex) return String.fromCharCode(Number.parseInt(hex, 16));
       if (escape === "\n" || escape === "\r\n") return "";
-      const simple = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", 0: "\0" };
+      const simple = {
+        n: "\n",
+        r: "\r",
+        t: "\t",
+        b: "\b",
+        f: "\f",
+        v: "\v",
+        0: "\0",
+      };
       return simple[character] ?? character;
-    });
+    },
+  );
 }
 
 function escapeJavaScriptString(value, quote) {
@@ -74,7 +85,10 @@ function findJavaScriptUrlLiterals(source) {
   const patterns = [
     new RegExp(String.raw`\bfetch\s*\(\s*${string()}`, "g"),
     new RegExp(String.raw`\baxios\s*\.\s*get\s*\(\s*${string()}`, "g"),
-    new RegExp(String.raw`\bnew\s+(?:Worker|SharedWorker|URL)\s*\(\s*${string()}`, "g")
+    new RegExp(
+      String.raw`\bnew\s+(?:Worker|SharedWorker|URL)\s*\(\s*${string()}`,
+      "g",
+    ),
   ];
   const literals = [];
 
@@ -86,14 +100,14 @@ function findJavaScriptUrlLiterals(source) {
         start: match.index + rawOffset,
         end: match.index + rawOffset + raw.length,
         quote: match[1],
-        raw
+        raw,
       });
     }
   }
 
   const openPattern = new RegExp(
     String.raw`\.\s*open\s*\(\s*${string()}\s*,\s*${string(3)}`,
-    "g"
+    "g",
   );
   for (const match of source.matchAll(openPattern)) {
     if (!/^(?:GET|HEAD)$/i.test(decodeJavaScriptString(match[2]))) continue;
@@ -103,7 +117,7 @@ function findJavaScriptUrlLiterals(source) {
       start: match.index + rawOffset,
       end: match.index + rawOffset + raw.length,
       quote: match[3],
-      raw
+      raw,
     });
   }
 
@@ -111,14 +125,17 @@ function findJavaScriptUrlLiterals(source) {
 }
 
 function rewriteSrcset(value, baseUrl, addReference) {
-  return value.split(",").map((candidate) => {
-    const trimmed = candidate.trim();
-    if (!trimmed) return trimmed;
-    const match = trimmed.match(/^(\S+)(\s+.*)?$/);
-    if (!match) return trimmed;
-    const replacement = addReference(match[1], baseUrl);
-    return `${replacement ?? match[1]}${match[2] ?? ""}`;
-  }).join(", ");
+  return value
+    .split(",")
+    .map((candidate) => {
+      const trimmed = candidate.trim();
+      if (!trimmed) return trimmed;
+      const match = trimmed.match(/^(\S+)(\s+.*)?$/);
+      if (!match) return trimmed;
+      const replacement = addReference(match[1], baseUrl);
+      return `${replacement ?? match[1]}${match[2] ?? ""}`;
+    })
+    .join(", ");
 }
 
 export async function processHtml(source, responseUrl, rewrite, options = {}) {
@@ -142,7 +159,10 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
   }
 
   $("[srcset]").each((_, element) => {
-    $(element).attr("srcset", rewriteSrcset($(element).attr("srcset"), baseUrl, add));
+    $(element).attr(
+      "srcset",
+      rewriteSrcset($(element).attr("srcset"), baseUrl, add),
+    );
   });
 
   $("[style]").each((_, element) => {
@@ -159,20 +179,32 @@ export async function processHtml(source, responseUrl, rewrite, options = {}) {
   for (const element of $("script:not([src])").toArray()) {
     const type = ($(element).attr("type") || "").trim().toLowerCase();
     if (!JAVASCRIPT_SCRIPT_TYPES.has(type)) continue;
-    const result = await processJavaScript($(element).html() || "", baseUrl, rewrite);
+    const result = await processJavaScript(
+      $(element).html() || "",
+      baseUrl,
+      rewrite,
+    );
     $(element).html(result.content);
     dependencies.push(...result.dependencies);
   }
 
   const rewriteNavigation = options.rewriteNavigation;
   if (rewriteNavigation) {
-    for (const [selector, attribute] of [["a[href]", "href"], ["area[href]", "href"], ["form[action]", "action"]]) {
+    for (const [selector, attribute] of [
+      ["a[href]", "href"],
+      ["area[href]", "href"],
+      ["form[action]", "action"],
+    ]) {
       $(selector).each((_, element) => {
         const raw = $(element).attr(attribute);
         const resolved = resolveReference(raw, baseUrl);
         if (!resolved) return;
-        const replacement = rewriteResolvedReference(raw, baseUrl, resolved, (url) =>
-          rewriteNavigation(url, raw));
+        const replacement = rewriteResolvedReference(
+          raw,
+          baseUrl,
+          resolved,
+          (url) => rewriteNavigation(url, raw),
+        );
         if (replacement) $(element).attr(attribute, replacement);
       });
     }
@@ -186,10 +218,13 @@ function processCssValue(value, baseUrl, addReference) {
   const parsed = valueParser(value || "");
   parsed.walk((node) => {
     if (node.type !== "function" || node.value.toLowerCase() !== "url") return;
-    const raw = valueParser.stringify(node.nodes).trim().replace(/^(['"])(.*)\1$/, "$2");
+    const raw = valueParser
+      .stringify(node.nodes)
+      .trim()
+      .replace(/^(['"])(.*)\1$/, "$2");
     const replacement = addReference(raw, baseUrl);
     if (replacement) {
-      node.nodes = [{ type: "string", quote: "\"", value: replacement }];
+      node.nodes = [{ type: "string", quote: '"', value: replacement }];
     }
   });
   return parsed.toString();
@@ -216,12 +251,15 @@ export async function processCss(source, responseUrl, rewrite) {
     let raw;
     if (first?.type === "string") raw = first.value;
     if (first?.type === "function" && first.value.toLowerCase() === "url") {
-      raw = valueParser.stringify(first.nodes).trim().replace(/^(['"])(.*)\1$/, "$2");
+      raw = valueParser
+        .stringify(first.nodes)
+        .trim()
+        .replace(/^(['"])(.*)\1$/, "$2");
     }
     const replacement = add(raw);
     if (!replacement) return;
     if (first.type === "string") first.value = replacement;
-    else first.nodes = [{ type: "string", quote: "\"", value: replacement }];
+    else first.nodes = [{ type: "string", quote: '"', value: replacement }];
     rule.params = parsed.toString();
   });
 
@@ -251,13 +289,18 @@ export async function processJavaScript(source, responseUrl, rewrite) {
     edits.push({
       start: item.s,
       end: item.e,
-      value: rewriteResolvedReference(item.n, responseUrl, resolved, rewrite)
+      value: rewriteResolvedReference(item.n, responseUrl, resolved, rewrite),
     });
   }
 
   const occupied = edits.map(({ start, end }) => ({ start, end }));
   for (const literal of findJavaScriptUrlLiterals(source)) {
-    if (occupied.some(({ start, end }) => literal.start < end && literal.end > start)) continue;
+    if (
+      occupied.some(
+        ({ start, end }) => literal.start < end && literal.end > start,
+      )
+    )
+      continue;
     const raw = decodeJavaScriptString(literal.raw);
     const resolved = resolveReference(raw, responseUrl);
     if (!resolved) continue;
@@ -267,8 +310,8 @@ export async function processJavaScript(source, responseUrl, rewrite) {
       end: literal.end,
       value: escapeJavaScriptString(
         rewriteResolvedReference(raw, responseUrl, resolved, rewrite),
-        literal.quote
-      )
+        literal.quote,
+      ),
     });
   }
 
@@ -281,14 +324,15 @@ export async function processJavaScript(source, responseUrl, rewrite) {
     edits.push({
       start,
       end: start + match[2].length,
-      value: rewriteResolvedReference(match[2], responseUrl, resolved, rewrite)
+      value: rewriteResolvedReference(match[2], responseUrl, resolved, rewrite),
     });
   }
 
   edits.sort((a, b) => b.start - a.start);
   let content = source;
   for (const edit of edits) {
-    content = content.slice(0, edit.start) + edit.value + content.slice(edit.end);
+    content =
+      content.slice(0, edit.start) + edit.value + content.slice(edit.end);
   }
   return { content, dependencies: [...new Set(dependencies)] };
 }
