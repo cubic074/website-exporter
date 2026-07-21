@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { processCss, processHtml, processJavaScript } from "./discover.js";
@@ -11,6 +12,7 @@ import {
 
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 10;
+const MANIFEST_FILENAME = "mirror-manifest.json";
 
 function contentKind(contentType, url) {
   const mime = contentType.split(";")[0].trim().toLowerCase();
@@ -26,54 +28,174 @@ function contentKind(contentType, url) {
   return "binary";
 }
 
-async function fetchWithSafeRedirects(url, allowPrivate) {
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeEntryUrls(input) {
+  const values = Array.isArray(input) ? input : [input];
+  if (values.length === 0 || values.some((value) => value === undefined || value === null || value === "")) {
+    throw new Error("At least one entry URL is required");
+  }
+
+  const entries = values.map((value) => new URL(value));
+  for (const entry of entries) {
+    if (!["http:", "https:"].includes(entry.protocol)) {
+      throw new Error(`Entry URL must use http:// or https://: ${entry.href}`);
+    }
+    entry.hash = "";
+  }
+
+  const crawlOrigin = entries[0].origin;
+  const externalEntry = entries.find((entry) => entry.origin !== crawlOrigin);
+  if (externalEntry) {
+    throw new Error(
+      `All entry points must use the same origin (${crawlOrigin}); received ${externalEntry.origin}`
+    );
+  }
+  return entries;
+}
+
+function createRequestHeaders(customHeaders) {
+  const headers = new Headers({
+    accept: "*/*",
+    "user-agent": "static-site-dependency-mirror/2.0"
+  });
+  if (!customHeaders) return headers;
+
+  const supplied = new Headers(customHeaders);
+  for (const [name, value] of supplied) headers.set(name, value);
+  return headers;
+}
+
+async function fetchWithSafeRedirects(url, options) {
   let current = new URL(url);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
-    await assertSafeUrl(current, allowPrivate);
+    if (current.origin !== options.crawlOrigin) {
+      throw new Error(`External redirect not followed: ${current.href}`);
+    }
+    await assertSafeUrl(current, options.allowPrivate);
     const response = await fetch(current, {
       redirect: "manual",
-      headers: {
-        "user-agent": "static-site-dependency-mirror/1.0",
-        "accept": "*/*"
-      }
+      headers: options.headers
     });
     if (!REDIRECT_CODES.has(response.status)) return { response, finalUrl: current.href };
+
     const location = response.headers.get("location");
     if (!location) return { response, finalUrl: current.href };
-    current = new URL(location, current);
+    const next = new URL(location, current);
+    if (next.origin !== options.crawlOrigin) {
+      await response.body?.cancel();
+      throw new Error(`External redirect not followed: ${next.href}`);
+    }
+    await response.body?.cancel();
+    current = next;
   }
   throw new Error(`Too many redirects (maximum ${MAX_REDIRECTS})`);
 }
 
-export async function mirrorSite(entryUrl, options = {}) {
+function withUrlSuffix(relativePath, url, attempt = 0) {
+  const extension = path.extname(relativePath);
+  const stem = extension ? relativePath.slice(0, -extension.length) : relativePath;
+  const suffix = sha256(`${url}\0${attempt}`).slice(0, 10);
+  return `${stem}.__u_${suffix}${extension}`;
+}
+
+function publicRecord(record) {
+  return {
+    originalUrl: record.originalUrl,
+    finalUrl: record.finalUrl,
+    localPath: record.localPath,
+    contentType: record.contentType,
+    status: record.status,
+    httpStatus: record.httpStatus,
+    parentUrl: record.parentUrl,
+    isEntry: record.isEntry,
+    contentLength: record.contentLength,
+    contentSha256: record.contentSha256,
+    outputSha256: record.outputSha256,
+    sourceDuplicateOf: record.sourceDuplicateOf,
+    duplicateOf: record.duplicateOf,
+    error: record.error
+  };
+}
+
+async function unlinkIfExists(filePath) {
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+}
+
+export async function mirrorSite(entryUrls, options = {}) {
+  const entries = normalizeEntryUrls(entryUrls);
   const output = path.resolve(options.output || "mirror");
-  const concurrency = options.concurrency || 8;
+  const concurrency = options.concurrency ?? 8;
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 100) {
+    throw new Error("concurrency must be an integer from 1 to 100");
+  }
+
   const allowPrivate = Boolean(options.allowPrivate);
   const logger = options.logger || (() => {});
-  const entry = new URL(entryUrl);
-  const rootDir = path.join(output, hostDirectory(entry));
-  const manifestPath = path.join(rootDir, "mirror-manifest.json");
+  const log = (message) => {
+    try {
+      logger(message);
+    } catch {
+      // Logging must not change crawl results.
+    }
+  };
+  const crawlOrigin = entries[0].origin;
+  const headers = createRequestHeaders(options.headers);
+  const rootDir = path.join(output, hostDirectory(entries[0]));
+  const manifestPath = path.join(rootDir, MANIFEST_FILENAME);
   const queue = [];
-  const records = new Map();
-  const summary = { downloaded: 0, skipped: 0, failed: 0 };
+  const records = [];
+  const recordsByUrl = new Map();
+  const externalUrls = new Set();
+  const claimedPaths = new Set([MANIFEST_FILENAME.toLowerCase()]);
+  const sourceContentOwners = new Map();
+  const summary = { downloaded: 0, skipped: 0, deduplicated: 0, external: 0, failed: 0 };
   let active = 0;
-  let fatalEntryError;
+  let started = false;
   let resolveComplete;
   const complete = new Promise((resolve) => { resolveComplete = resolve; });
 
   await fs.mkdir(rootDir, { recursive: true });
+
+  function allocateLocalPath(url, contentType) {
+    const initial = localPathForUrl(new URL(url), contentType);
+    let candidate = initial;
+    let attempt = 0;
+    while (claimedPaths.has(candidate.split(path.sep).join("/").toLowerCase())) {
+      candidate = withUrlSuffix(initial, url, attempt);
+      attempt += 1;
+    }
+    claimedPaths.add(candidate.split(path.sep).join("/").toLowerCase());
+    return candidate;
+  }
 
   function enqueue(url, parentUrl = null, isEntry = false) {
     let normalized;
     try {
       normalized = normalizeUrl(url);
     } catch {
-      return;
+      return null;
     }
-    if (records.has(normalized)) {
+
+    if (new URL(normalized).origin !== crawlOrigin) {
+      externalUrls.add(normalized);
+      summary.external = externalUrls.size;
+      return null;
+    }
+
+    const existing = recordsByUrl.get(normalized);
+    if (existing) {
+      if (isEntry) existing.isEntry = true;
       summary.skipped += 1;
-      return;
+      return existing;
     }
+
     const record = {
       originalUrl: normalized,
       finalUrl: null,
@@ -82,55 +204,72 @@ export async function mirrorSite(entryUrl, options = {}) {
       status: "queued",
       httpStatus: null,
       parentUrl,
+      isEntry,
+      contentLength: null,
+      contentSha256: null,
+      outputSha256: null,
+      sourceDuplicateOf: null,
+      duplicateOf: null,
       error: null
     };
-    records.set(normalized, record);
-    queue.push({ url: normalized, record, isEntry });
-    pump();
+    records.push(record);
+    recordsByUrl.set(normalized, record);
+    queue.push({ url: normalized, record });
+    if (started) pump();
+    return record;
   }
 
   async function processJob(job) {
-    const { url, record, isEntry } = job;
+    const { url, record } = job;
     try {
-      const { response, finalUrl } = await fetchWithSafeRedirects(url, allowPrivate);
-      record.finalUrl = finalUrl;
+      const { response, finalUrl } = await fetchWithSafeRedirects(url, {
+        allowPrivate,
+        crawlOrigin,
+        headers
+      });
+      record.finalUrl = normalizeUrl(finalUrl);
       record.httpStatus = response.status;
       record.contentType = response.headers.get("content-type") || "application/octet-stream";
-      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+      }
 
-      const relativePath = localPathForUrl(new URL(finalUrl), record.contentType);
-      const absolutePath = path.join(rootDir, relativePath);
-      record.localPath = relativePath.split(path.sep).join("/");
-      const body = Buffer.from(await response.arrayBuffer());
-      const kind = contentKind(record.contentType, finalUrl);
-      record.body = body;
-      record.kind = kind;
-      record.absolutePath = absolutePath;
+      if (!recordsByUrl.has(record.finalUrl)) recordsByUrl.set(record.finalUrl, record);
+      record.localPath = allocateLocalPath(record.finalUrl, record.contentType);
+      record.absolutePath = path.join(rootDir, record.localPath);
+      record.body = Buffer.from(await response.arrayBuffer());
+      record.contentLength = record.body.length;
+      record.contentSha256 = sha256(record.body);
+      record.kind = contentKind(record.contentType, record.finalUrl);
 
-      if (kind !== "binary") {
-        const source = body.toString("utf8");
+      if (record.kind !== "binary") {
+        const source = record.body.toString("utf8");
         const rewrite = (dependencyUrl) => dependencyUrl;
         let result;
-        if (kind === "html") result = await processHtml(source, finalUrl, rewrite);
-        if (kind === "css") result = await processCss(source, finalUrl, rewrite);
-        if (kind === "javascript") result = await processJavaScript(source, finalUrl, rewrite);
+        if (record.kind === "html") result = await processHtml(source, record.finalUrl, rewrite);
+        if (record.kind === "css") result = await processCss(source, record.finalUrl, rewrite);
+        if (record.kind === "javascript") result = await processJavaScript(source, record.finalUrl, rewrite);
         for (const dependency of result.dependencies) enqueue(dependency, url);
       }
 
+      const sourceOwner = sourceContentOwners.get(record.contentSha256);
+      if (sourceOwner) record.sourceDuplicateOf = sourceOwner.originalUrl;
+      else sourceContentOwners.set(record.contentSha256, record);
+
       record.status = "downloaded";
       summary.downloaded += 1;
-      logger(`[${response.status}] ${url}`);
+      log(`[${response.status}] ${url}`);
     } catch (error) {
       record.status = "failed";
       record.error = error.message;
       summary.failed += 1;
-      logger(`[FAILED] ${url}: ${error.message}`);
-      if (isEntry) fatalEntryError = error;
+      log(`[FAILED] ${url}: ${error.message}`);
     }
   }
 
   function pump() {
-    while (active < concurrency && queue.length > 0 && !fatalEntryError) {
+    while (active < concurrency && queue.length > 0) {
       const job = queue.shift();
       active += 1;
       processJob(job).finally(() => {
@@ -138,56 +277,92 @@ export async function mirrorSite(entryUrl, options = {}) {
         pump();
       });
     }
-    if (active === 0 && (queue.length === 0 || fatalEntryError)) resolveComplete();
+    if (started && active === 0 && queue.length === 0) resolveComplete();
   }
 
-  enqueue(entry.href, null, true);
+  for (const entry of entries) enqueue(entry.href, null, true);
+  started = true;
+  pump();
   await complete;
 
-  if (!fatalEntryError) {
-    for (const record of records.values()) {
-      if (record.status !== "downloaded") continue;
-      let outputBody = record.body;
-      if (record.kind !== "binary") {
-        const source = record.body.toString("utf8");
-        const rewrite = (dependencyUrl) => {
-          const target = records.get(normalizeUrl(dependencyUrl));
-          if (!target?.localPath) return dependencyUrl;
-          return relativeReference(record.localPath, target.localPath);
-        };
-        let result;
-        if (record.kind === "html") result = await processHtml(source, record.finalUrl, rewrite);
-        if (record.kind === "css") result = await processCss(source, record.finalUrl, rewrite);
-        if (record.kind === "javascript") {
-          result = await processJavaScript(source, record.finalUrl, rewrite);
+  for (const record of records) {
+    if (record.status !== "downloaded") continue;
+    let outputBody = record.body;
+    if (record.kind !== "binary") {
+      const source = record.body.toString("utf8");
+      const rewrite = (dependencyUrl) => {
+        let normalized;
+        try {
+          normalized = normalizeUrl(dependencyUrl);
+        } catch {
+          return dependencyUrl;
         }
-        outputBody = Buffer.from(result.content);
+        if (new URL(normalized).origin !== crawlOrigin) return dependencyUrl;
+        const target = recordsByUrl.get(normalized);
+        if (!target?.localPath || target.status !== "downloaded") return dependencyUrl;
+        return relativeReference(record.localPath, target.localPath);
+      };
+      let result;
+      if (record.kind === "html") {
+        result = await processHtml(source, record.finalUrl, rewrite, { rewriteNavigation: rewrite });
       }
-      await fs.mkdir(path.dirname(record.absolutePath), { recursive: true });
-      await fs.writeFile(record.absolutePath, outputBody);
-      logger(`[SAVED] ${record.localPath}`);
+      if (record.kind === "css") result = await processCss(source, record.finalUrl, rewrite);
+      if (record.kind === "javascript") {
+        result = await processJavaScript(source, record.finalUrl, rewrite);
+      }
+      outputBody = Buffer.from(result.content);
     }
+    record.outputBody = outputBody;
+    record.outputSha256 = sha256(outputBody);
   }
 
-  const publicRecords = [...records.values()].map((record) => ({
-    originalUrl: record.originalUrl,
-    finalUrl: record.finalUrl,
-    localPath: record.localPath,
-    contentType: record.contentType,
-    status: record.status,
-    httpStatus: record.httpStatus,
-    parentUrl: record.parentUrl,
-    error: record.error
-  }));
+  const outputOwners = new Map();
+  for (const record of records) {
+    if (record.status !== "downloaded") continue;
+    const owner = outputOwners.get(record.outputSha256);
+    if (owner) {
+      record.duplicateOf = owner.originalUrl;
+      summary.deduplicated += 1;
+    } else {
+      outputOwners.set(record.outputSha256, record);
+    }
+
+    await fs.mkdir(path.dirname(record.absolutePath), { recursive: true });
+    await unlinkIfExists(record.absolutePath);
+    if (!owner) {
+      await fs.writeFile(record.absolutePath, record.outputBody);
+    } else {
+      try {
+        await fs.link(owner.absolutePath, record.absolutePath);
+      } catch {
+        await fs.writeFile(record.absolutePath, record.outputBody);
+      }
+    }
+    log(`[SAVED] ${record.localPath.split(path.sep).join("/")}`);
+  }
+
   const manifest = {
-    version: 1,
-    entryUrl: entry.href,
+    version: 2,
+    entryUrl: entries[0].href,
+    entryUrls: entries.map((entry) => entry.href),
+    origin: crawlOrigin,
     createdAt: new Date().toISOString(),
     summary,
-    resources: publicRecords
+    externalUrls: [...externalUrls],
+    resources: records.map(publicRecord)
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  if (fatalEntryError) throw new Error(`Unable to download entry document: ${fatalEntryError.message}`);
 
-  return { rootDir, manifestPath, summary, manifest };
+  const result = { rootDir, manifestPath, summary, manifest };
+  const failedEntries = records.filter((record) => record.isEntry && record.status === "failed");
+  if (failedEntries.length > 0) {
+    const error = new Error(
+      `Unable to download ${failedEntries.length} entry point(s): ` +
+      failedEntries.map((record) => `${record.originalUrl} (${record.error})`).join(", ")
+    );
+    error.result = result;
+    throw error;
+  }
+
+  return result;
 }

@@ -1,6 +1,6 @@
 # Static Site Dependency Mirror
 
-A Node.js CLI for downloading one entry document and the static files it references. HTML, CSS, and JavaScript are inspected recursively and supported URLs are rewritten to point at the downloaded files.
+A Node.js CLI for exporting one or more entry pages and their recursively discovered, same-origin dependencies. Downloaded references are rewritten for local use. External URLs remain external and are never requested by the exporter.
 
 This is intended for authorized analysis and offline inspection. It is not a browser, a full website crawler, or an authentication/anti-bot bypass.
 
@@ -24,7 +24,7 @@ npm.cmd install
 ## Usage
 
 ```sh
-node src/cli.js https://drawaria.online/
+node src/cli.js https://example.com/ https://example.com/about
 ```
 
 Options:
@@ -32,6 +32,7 @@ Options:
 ```text
 --output <path>       Output parent directory (default: mirror)
 --concurrency <n>     Simultaneous downloads, 1-100 (default: 8)
+--header <name:value> Add a request header; may be repeated
 --allow-private       Permit localhost and private-network targets
 --help                Show CLI help
 ```
@@ -39,8 +40,14 @@ Options:
 Example:
 
 ```sh
-node src/cli.js https://example.com/ --output ./downloads --concurrency 12
+node src/cli.js https://example.com/ https://example.com/about \
+  --output ./downloads \
+  --concurrency 12 \
+  --header "Cookie: session=your-session-cookie" \
+  --header "X-Access-Key: your-key"
 ```
+
+All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
 
 The default layout is:
 
@@ -48,14 +55,12 @@ The default layout is:
 mirror/
   example.com/
     mirror-manifest.json
-    example.com/
-      index.html
-      assets/
-    cdn.example.net/
-      library.js
+    index.html
+    about.html
+    assets/
 ```
 
-Each remote host gets a separate subtree. Query strings receive a stable hash suffix so URLs such as `app.js?v=1` and `app.js?v=2` do not collide.
+The entry domain is the root directory inside `mirror`. Query strings receive a stable hash suffix so URLs such as `app.js?v=1` and `app.js?v=2` do not collide. Other path collisions receive a stable URL suffix.
 
 ## What is discovered
 
@@ -64,9 +69,34 @@ Each remote host gets a separate subtree. Query strings receive a stable hash su
 - Imports in inline module scripts
 - CSS `@import` and `url(...)`
 - JavaScript static imports/exports and literal `import(...)`
+- Literal JavaScript `fetch(...)`, `axios.get(...)`, GET/HEAD `XMLHttpRequest.open(...)`, `new URL(...)`, and Worker resource URLs
 - JavaScript source-map comments
 
-Ordinary links, forms, runtime `fetch`/XHR/WebSocket traffic, and dynamically constructed JavaScript URLs are not followed.
+Ordinary links and forms do not expand the crawl. When they point to another supplied entry page they are rewritten to that local page; otherwise they continue to point to the live URL. Dynamically constructed JavaScript URLs, non-GET API behavior, WebSocket traffic, and browser-generated requests cannot be exported reliably and are left alone.
+
+## Programmatic use
+
+```js
+import { mirrorSite } from "./src/mirror.js";
+
+await mirrorSite([
+  "https://example.com/",
+  "https://example.com/account"
+], {
+  output: "./mirror",
+  headers: {
+    Cookie: "session=your-session-cookie"
+  }
+});
+```
+
+`mirrorSite` continues to accept a single URL string for compatibility.
+
+## Deduplication and manifest
+
+URLs are normalized and queued once per run. Every downloaded response and final output receives a SHA-256 fingerprint in `mirror-manifest.json`. Distinct URLs with byte-identical final output are stored as hard links when the filesystem supports them, with `duplicateOf` identifying the first resource. A normal file is written as a portable fallback when hard links are unavailable. `sourceDuplicateOf` also records identical response bodies whose rewritten outputs differ.
+
+The manifest lists skipped external URLs under `externalUrls`; request headers and their values are never written to it.
 
 ## Security behavior
 
@@ -74,7 +104,7 @@ Only HTTP and HTTPS resources are accepted. Localhost, loopback, link-local, and
 
 ## Repeat runs and failures
 
-Files reached in the current run are refreshed. Unrelated files already in the destination are left untouched. A failed dependency does not stop the crawl; its error is written to `mirror-manifest.json`. An inaccessible entry document produces a nonzero exit code.
+Files reached in the current run are refreshed. Unrelated files already in the destination are left untouched. A failed dependency does not stop the crawl; its error is written to `mirror-manifest.json`. All entry points are attempted, and one or more inaccessible entry documents produce a nonzero exit code after the manifest is written.
 
 ## Test
 

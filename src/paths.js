@@ -28,7 +28,8 @@ function safeSegment(segment) {
       return segment;
     }
   })();
-  const safe = decoded.replace(/[<>:"|?*\x00-\x1f]/g, "_").replace(/[. ]+$/g, "");
+  const safe = decoded.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").replace(/[. ]+$/g, "");
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(safe)) return `_${safe}`;
   return safe || "_";
 }
 
@@ -63,7 +64,7 @@ export function localPathForUrl(input, contentType = "") {
     filename = `${filename.slice(0, ext ? -ext.length : undefined)}.__q_${hash}${ext}`;
   }
 
-  return path.join(hostDirectory(url), ...segments, filename || "index.html");
+  return path.join(...segments, filename || "index.html");
 }
 
 export function relativeReference(fromFile, toFile) {

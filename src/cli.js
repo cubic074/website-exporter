@@ -6,11 +6,12 @@ import { pathToFileURL } from "node:url";
 import { mirrorSite } from "./mirror.js";
 
 function usage() {
-  return `Usage: node src/cli.js <url> [options]
+  return `Usage: node src/cli.js <url> [url...] [options]
 
 Options:
   --output <path>       Output parent directory (default: mirror)
   --concurrency <n>     Maximum simultaneous downloads (default: 8)
+  --header <name:value> Add a request header; may be repeated
   --allow-private       Allow loopback and private-network targets
   --help                Show this help
 `;
@@ -20,9 +21,10 @@ export function parseArgs(argv) {
   const options = {
     output: "mirror",
     concurrency: 8,
-    allowPrivate: false
+    allowPrivate: false,
+    headers: []
   };
-  let entryUrl;
+  const entryUrls = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -39,6 +41,18 @@ export function parseArgs(argv) {
       options.output = value;
       continue;
     }
+    if (arg === "--header") {
+      const value = argv[++i];
+      const separator = value?.indexOf(":") ?? -1;
+      if (separator < 1) throw new Error("--header requires a name:value pair");
+      const name = value.slice(0, separator).trim();
+      const headerValue = value.slice(separator + 1).trim();
+      if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name)) {
+        throw new Error(`Invalid header name: ${name}`);
+      }
+      options.headers.push([name, headerValue]);
+      continue;
+    }
     if (arg === "--concurrency") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value < 1 || value > 100) {
@@ -48,18 +62,24 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg.startsWith("-")) throw new Error(`Unknown option: ${arg}`);
-    if (entryUrl) throw new Error("Only one entry URL may be supplied");
-    entryUrl = arg;
+    entryUrls.push(arg);
   }
 
-  if (!entryUrl) throw new Error("An entry URL is required");
-  const parsed = new URL(entryUrl);
-  if (!["http:", "https:"].includes(parsed.protocol)) {
-    throw new Error("Entry URL must use http:// or https://");
+  if (entryUrls.length === 0) throw new Error("At least one entry URL is required");
+  const parsedEntries = entryUrls.map((entryUrl) => new URL(entryUrl));
+  for (const parsed of parsedEntries) {
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error("Entry URLs must use http:// or https://");
+    }
   }
 
   options.output = path.resolve(options.output);
-  return { entryUrl: parsed.href, options, help: false };
+  return {
+    entryUrl: parsedEntries[0].href,
+    entryUrls: parsedEntries.map((entry) => entry.href),
+    options,
+    help: false
+  };
 }
 
 async function main() {
@@ -70,14 +90,17 @@ async function main() {
       return;
     }
 
-    const result = await mirrorSite(parsed.entryUrl, {
+    const result = await mirrorSite(parsed.entryUrls, {
       ...parsed.options,
       logger: (message) => process.stdout.write(`${message}\n`)
     });
 
     process.stdout.write(
       `Done: ${result.summary.downloaded} downloaded, ` +
-      `${result.summary.skipped} skipped, ${result.summary.failed} failed\n` +
+      `${result.summary.skipped} URL duplicates skipped, ` +
+      `${result.summary.deduplicated} content duplicates, ` +
+      `${result.summary.external} external ignored, ` +
+      `${result.summary.failed} failed\n` +
       `Mirror: ${result.rootDir}\n` +
       `Manifest: ${result.manifestPath}\n`
     );

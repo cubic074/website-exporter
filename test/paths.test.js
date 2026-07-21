@@ -6,11 +6,22 @@ import { localPathForUrl, normalizeUrl, relativeReference } from "../src/paths.j
 test("infers extensions and handles directory URLs", () => {
   assert.equal(
     localPathForUrl("https://example.com/", "text/html"),
-    path.join("example.com", "index.html")
+    "index.html"
   );
   assert.equal(
     localPathForUrl("https://example.com/app", "text/javascript"),
-    path.join("example.com", "app.js")
+    "app.js"
+  );
+});
+
+test("encoded path separators cannot escape a URL path segment", () => {
+  assert.equal(
+    localPathForUrl("https://example.com/a%2Fb/file", "text/html"),
+    path.join("a_b", "file.html")
+  );
+  assert.equal(
+    localPathForUrl("https://example.com/CON", "text/html"),
+    "_CON.html"
   );
 });
 

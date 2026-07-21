@@ -14,6 +14,15 @@ const HTML_ATTRIBUTES = [
   ["video[poster]", "poster"]
 ];
 
+const JAVASCRIPT_SCRIPT_TYPES = new Set([
+  "",
+  "module",
+  "text/javascript",
+  "application/javascript",
+  "application/ecmascript",
+  "text/ecmascript"
+]);
+
 function resolveReference(raw, baseUrl) {
   if (!raw || raw.startsWith("#")) return null;
   try {
@@ -24,6 +33,81 @@ function resolveReference(raw, baseUrl) {
   } catch {
     return null;
   }
+}
+
+function rewriteResolvedReference(raw, baseUrl, resolved, rewrite) {
+  const replacement = rewrite(resolved);
+  if (!replacement) return replacement;
+  const fragment = new URL(raw, baseUrl).hash;
+  if (!fragment) return replacement;
+  try {
+    if (new URL(replacement, baseUrl).hash === fragment) return replacement;
+  } catch {
+    // Preserve the fragment on nonstandard rewrite values as well.
+  }
+  return `${replacement}${fragment}`;
+}
+
+function decodeJavaScriptString(raw) {
+  return raw.replace(/\\(u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|\r?\n|.)/gs,
+    (_, escape, codePoint, unicode, hex, character) => {
+      if (codePoint) return String.fromCodePoint(Number.parseInt(codePoint, 16));
+      if (unicode) return String.fromCharCode(Number.parseInt(unicode, 16));
+      if (hex) return String.fromCharCode(Number.parseInt(hex, 16));
+      if (escape === "\n" || escape === "\r\n") return "";
+      const simple = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", v: "\v", 0: "\0" };
+      return simple[character] ?? character;
+    });
+}
+
+function escapeJavaScriptString(value, quote) {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll(quote, `\\${quote}`)
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
+}
+
+function findJavaScriptUrlLiterals(source) {
+  const string = (quoteGroup = 1) =>
+    `(["'])((?:\\\\[\\s\\S]|(?!\\${quoteGroup})[^\\\\\\r\\n])*)\\${quoteGroup}`;
+  const patterns = [
+    new RegExp(String.raw`\bfetch\s*\(\s*${string()}`, "g"),
+    new RegExp(String.raw`\baxios\s*\.\s*get\s*\(\s*${string()}`, "g"),
+    new RegExp(String.raw`\bnew\s+(?:Worker|SharedWorker|URL)\s*\(\s*${string()}`, "g")
+  ];
+  const literals = [];
+
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const raw = match[2];
+      const rawOffset = match[0].lastIndexOf(raw);
+      literals.push({
+        start: match.index + rawOffset,
+        end: match.index + rawOffset + raw.length,
+        quote: match[1],
+        raw
+      });
+    }
+  }
+
+  const openPattern = new RegExp(
+    String.raw`\.\s*open\s*\(\s*${string()}\s*,\s*${string(3)}`,
+    "g"
+  );
+  for (const match of source.matchAll(openPattern)) {
+    if (!/^(?:GET|HEAD)$/i.test(decodeJavaScriptString(match[2]))) continue;
+    const raw = match[4];
+    const rawOffset = match[0].lastIndexOf(raw);
+    literals.push({
+      start: match.index + rawOffset,
+      end: match.index + rawOffset + raw.length,
+      quote: match[3],
+      raw
+    });
+  }
+
+  return literals;
 }
 
 function rewriteSrcset(value, baseUrl, addReference) {
@@ -37,7 +121,7 @@ function rewriteSrcset(value, baseUrl, addReference) {
   }).join(", ");
 }
 
-export async function processHtml(source, responseUrl, rewrite) {
+export async function processHtml(source, responseUrl, rewrite, options = {}) {
   const $ = cheerio.load(source, { decodeEntities: false });
   const baseHref = $("base[href]").first().attr("href");
   const baseUrl = baseHref ? new URL(baseHref, responseUrl).href : responseUrl;
@@ -46,7 +130,7 @@ export async function processHtml(source, responseUrl, rewrite) {
     const resolved = resolveReference(raw, base);
     if (!resolved) return null;
     dependencies.push(resolved);
-    return rewrite(resolved);
+    return rewriteResolvedReference(raw, base, resolved, rewrite);
   };
 
   for (const [selector, attribute] of HTML_ATTRIBUTES) {
@@ -72,10 +156,26 @@ export async function processHtml(source, responseUrl, rewrite) {
     dependencies.push(...result.dependencies);
   }
 
-  for (const element of $("script[type='module']:not([src])").toArray()) {
+  for (const element of $("script:not([src])").toArray()) {
+    const type = ($(element).attr("type") || "").trim().toLowerCase();
+    if (!JAVASCRIPT_SCRIPT_TYPES.has(type)) continue;
     const result = await processJavaScript($(element).html() || "", baseUrl, rewrite);
     $(element).html(result.content);
     dependencies.push(...result.dependencies);
+  }
+
+  const rewriteNavigation = options.rewriteNavigation;
+  if (rewriteNavigation) {
+    for (const [selector, attribute] of [["a[href]", "href"], ["area[href]", "href"], ["form[action]", "action"]]) {
+      $(selector).each((_, element) => {
+        const raw = $(element).attr(attribute);
+        const resolved = resolveReference(raw, baseUrl);
+        if (!resolved) return;
+        const replacement = rewriteResolvedReference(raw, baseUrl, resolved, (url) =>
+          rewriteNavigation(url, raw));
+        if (replacement) $(element).attr(attribute, replacement);
+      });
+    }
   }
 
   $("base").remove();
@@ -101,7 +201,7 @@ export async function processCss(source, responseUrl, rewrite) {
     const resolved = resolveReference(raw, responseUrl);
     if (!resolved) return null;
     dependencies.push(resolved);
-    return rewrite(resolved);
+    return rewriteResolvedReference(raw, responseUrl, resolved, rewrite);
   };
   let root;
   try {
@@ -148,7 +248,28 @@ export async function processJavaScript(source, responseUrl, rewrite) {
     const resolved = resolveReference(item.n, responseUrl);
     if (!resolved) continue;
     dependencies.push(resolved);
-    edits.push({ start: item.s, end: item.e, value: rewrite(resolved) });
+    edits.push({
+      start: item.s,
+      end: item.e,
+      value: rewriteResolvedReference(item.n, responseUrl, resolved, rewrite)
+    });
+  }
+
+  const occupied = edits.map(({ start, end }) => ({ start, end }));
+  for (const literal of findJavaScriptUrlLiterals(source)) {
+    if (occupied.some(({ start, end }) => literal.start < end && literal.end > start)) continue;
+    const raw = decodeJavaScriptString(literal.raw);
+    const resolved = resolveReference(raw, responseUrl);
+    if (!resolved) continue;
+    dependencies.push(resolved);
+    edits.push({
+      start: literal.start,
+      end: literal.end,
+      value: escapeJavaScriptString(
+        rewriteResolvedReference(raw, responseUrl, resolved, rewrite),
+        literal.quote
+      )
+    });
   }
 
   const sourceMapPattern = /([#@]\s*sourceMappingURL=)([^\s*]+)/g;
@@ -157,7 +278,11 @@ export async function processJavaScript(source, responseUrl, rewrite) {
     if (!resolved) continue;
     dependencies.push(resolved);
     const start = match.index + match[1].length;
-    edits.push({ start, end: start + match[2].length, value: rewrite(resolved) });
+    edits.push({
+      start,
+      end: start + match[2].length,
+      value: rewriteResolvedReference(match[2], responseUrl, resolved, rewrite)
+    });
   }
 
   edits.sort((a, b) => b.start - a.start);
