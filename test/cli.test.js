@@ -14,6 +14,7 @@ test("CLI accepts multiple entry points, headers, and exclusions", () => {
     "/logout",
     "--exclude",
     "https://example.com/private",
+    "--log-only",
   ]);
 
   assert.deepEqual(parsed.entryUrls, [
@@ -28,6 +29,7 @@ test("CLI accepts multiple entry points, headers, and exclusions", () => {
     "/logout",
     "https://example.com/private",
   ]);
+  assert.equal(parsed.options.logOnly, true);
 });
 
 test("CLI resolves repeated includes and exclusion patterns against a base URL", () => {

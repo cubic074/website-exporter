@@ -36,6 +36,7 @@ Options:
 --concurrency <n>     Simultaneous downloads, 1-100 (default: 8)
 --header <name:value> Add a request header; may be repeated
 --exclude <pattern>   Do not visit matching URLs; `*` is a wildcard; repeatable
+--log-only            Write only visited-urls.log; do not export site files
 --allow-private       Permit localhost and private-network targets
 --help                Show CLI help
 ```
@@ -43,44 +44,7 @@ Options:
 Example:
 
 ```sh
-node ./src/cli.js --base-url https://drawaria.online \
-  --include / \
-  --include /test \
-  --include /modpanel \
-  --include /login \
-  --include /event \
-  --include /links \
-  --include /terms \
-  --include /rules \
-  --include /room/1 \
-  --include /stencils \
-  --include /privacy \
-  --include /gallery \
-  --include /palettes \
-  --include /gallery/hot \
-  --include /gallery/new \
-  --include /gallery/top \
-  --include /scoreboards/ \
-  --include /gallery/img/ \
-  --include /gallery/picks \
-  --include /avatar/builder \
-  --include /scoreboards/mostwins \
-  --include /scoreboards/mostscore \
-  --include /scoreboards/moststars \
-  --include /scoreboards/mostscore/day \
-  --include /scoreboards/mostscore/year \
-  --include /scoreboards/mostscore/month \
-  --include /scoreboards/mostscore/alltime \
-  --include "/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
-  --include "/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
-  --include "/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
-  --include "/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
-  --exclude /clearsessions \
-  --exclude /logout \
-  --exclude "/avatar/cache/*" \
-  --output ./mirror \
-  --concurrency 12 \
-  --header "Cookie: sid1=your-session-cookie"
+node ./src/cli.js --base-url https://drawaria.online --include "/" --include "/test" --include "/modpanel" --include "/event" --include "/links" --include "/terms" --include "/rules" --include "/room/1" --include "/stencils" --include "/gallery" --include "/palettes" --include "/gallery/hot" --include "/gallery/new" --include "/gallery/top" --include "/scoreboards/" --include "/gallery/img/" --include "/gallery/picks" --include "/avatar/builder" --include "/scoreboards/mostwins" --include "/scoreboards/mostscore" --include "/scoreboards/moststars" --include "/scoreboards/mostscore/day" --include "/scoreboards/mostscore/year" --include "/scoreboards/mostscore/month" --include "/scoreboards/mostscore/alltime" --include "/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" --include "/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" --include "/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" --include "/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" --exclude "/avatar/cache/*" --exclude "/logout" --exclude "/clearsessions" --exclude "/*/logout" --exclude "/*/clearsessions" --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
 ```
 
 All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
@@ -95,6 +59,15 @@ node src/cli.js --base-url https://example.com \
   --include /about \
   --exclude "/avatar/cache/*" \
   --exclude "/logout"
+```
+
+Use `--log-only` to crawl and discover URLs without exporting the mirrored site. The only file written by that run is `visited-urls.log` inside the domain output directory. It contains one unique URL per line for every HTTP request attempted after safety checks, including redirect hops. External, excluded, and unsafe URLs are not listed because no HTTP request is made:
+
+```sh
+node src/cli.js --base-url https://example.com \
+  --include / \
+  --exclude "/avatar/cache/*" \
+  --log-only
 ```
 
 The default layout is:

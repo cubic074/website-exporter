@@ -16,6 +16,7 @@ Options:
   --concurrency <n>     Maximum simultaneous downloads (default: 8)
   --header <name:value> Add a request header; may be repeated
   --exclude <pattern>   Do not visit matching URLs; * is a wildcard; repeatable
+  --log-only            Write only visited-urls.log; do not export site files
   --allow-private       Allow loopback and private-network targets
   --help                Show this help
 `;
@@ -26,6 +27,7 @@ export function parseArgs(argv) {
     output: "mirror",
     concurrency: 8,
     allowPrivate: false,
+    logOnly: false,
     headers: [],
     excludeUrls: [],
   };
@@ -40,6 +42,10 @@ export function parseArgs(argv) {
     }
     if (arg === "--allow-private") {
       options.allowPrivate = true;
+      continue;
+    }
+    if (arg === "--log-only") {
+      options.logOnly = true;
       continue;
     }
     if (arg === "--base-url") {
@@ -149,6 +155,9 @@ async function main() {
       logger: (message) => process.stdout.write(`${message}\n`),
     });
 
+    const outputLocation = parsed.options.logOnly
+      ? `Log: ${result.visitedLogPath}\n`
+      : `Mirror: ${result.rootDir}\nManifest: ${result.manifestPath}\n`;
     process.stdout.write(
       `Done: ${result.summary.downloaded} downloaded, ` +
         `${result.summary.skipped} URL duplicates skipped, ` +
@@ -157,8 +166,7 @@ async function main() {
         `${result.summary.excluded} excluded, ` +
         `${result.summary.ignoredNavigation} query links ignored, ` +
         `${result.summary.failed} failed\n` +
-        `Mirror: ${result.rootDir}\n` +
-        `Manifest: ${result.manifestPath}\n`,
+        outputLocation,
     );
   } catch (error) {
     process.stderr.write(`Error: ${error.message}\n\n${usage()}`);

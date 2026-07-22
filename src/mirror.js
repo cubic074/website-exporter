@@ -13,6 +13,7 @@ import {
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 10;
 const MANIFEST_FILENAME = "mirror-manifest.json";
+const VISITED_LOG_FILENAME = "visited-urls.log";
 
 class ExcludedUrlError extends Error {
   constructor(url) {
@@ -112,6 +113,7 @@ async function fetchWithSafeRedirects(url, options) {
       throw new ExcludedUrlError(normalizeUrl(current));
     }
     await assertSafeUrl(current, options.allowPrivate);
+    options.onVisit(current.href);
     const response = await fetch(current, {
       redirect: "manual",
       headers: options.headers,
@@ -169,6 +171,22 @@ function publicRecord(record) {
   };
 }
 
+function throwIfEntryFailed(records, result) {
+  const failedEntries = records.filter(
+    (record) => record.isEntry && record.status === "failed",
+  );
+  if (failedEntries.length === 0) return;
+
+  const error = new Error(
+    `Unable to download ${failedEntries.length} entry point(s): ` +
+      failedEntries
+        .map((record) => `${record.originalUrl} (${record.error})`)
+        .join(", "),
+  );
+  error.result = result;
+  throw error;
+}
+
 async function unlinkIfExists(filePath) {
   try {
     await fs.unlink(filePath);
@@ -186,6 +204,7 @@ export async function mirrorSite(entryUrls, options = {}) {
   }
 
   const allowPrivate = Boolean(options.allowPrivate);
+  const logOnly = Boolean(options.logOnly);
   const logger = options.logger || (() => {});
   const log = (message) => {
     try {
@@ -207,12 +226,14 @@ export async function mirrorSite(entryUrls, options = {}) {
   const headers = createRequestHeaders(options.headers);
   const rootDir = path.join(output, hostDirectory(entries[0]));
   const manifestPath = path.join(rootDir, MANIFEST_FILENAME);
+  const visitedLogPath = path.join(rootDir, VISITED_LOG_FILENAME);
   const queue = [];
   const records = [];
   const recordsByUrl = new Map();
   const externalUrls = new Set();
   const excludedUrls = new Set();
   const ignoredNavigationUrls = new Set();
+  const visitedUrls = new Set();
   const claimedPaths = new Set([MANIFEST_FILENAME.toLowerCase()]);
   const sourceContentOwners = new Map();
   const summary = {
@@ -334,6 +355,7 @@ export async function mirrorSite(entryUrls, options = {}) {
         crawlOrigin,
         headers,
         isExcluded,
+        onVisit: (visitedUrl) => visitedUrls.add(normalizeUrl(visitedUrl)),
       });
       record.finalUrl = normalizeUrl(finalUrl);
       record.httpStatus = response.status;
@@ -412,6 +434,20 @@ export async function mirrorSite(entryUrls, options = {}) {
   started = true;
   pump();
   await complete;
+
+  if (logOnly) {
+    const contents = [...visitedUrls].map((url) => `${url}\n`).join("");
+    await fs.writeFile(visitedLogPath, contents);
+    const result = {
+      rootDir,
+      manifestPath: null,
+      visitedLogPath,
+      summary,
+      manifest: null,
+    };
+    throwIfEntryFailed(records, result);
+    return result;
+  }
 
   const queryPageGroups = new Map();
   for (const record of records) {
@@ -563,20 +599,13 @@ export async function mirrorSite(entryUrls, options = {}) {
   };
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
-  const result = { rootDir, manifestPath, summary, manifest };
-  const failedEntries = records.filter(
-    (record) => record.isEntry && record.status === "failed",
-  );
-  if (failedEntries.length > 0) {
-    const error = new Error(
-      `Unable to download ${failedEntries.length} entry point(s): ` +
-        failedEntries
-          .map((record) => `${record.originalUrl} (${record.error})`)
-          .join(", "),
-    );
-    error.result = result;
-    throw error;
-  }
-
+  const result = {
+    rootDir,
+    manifestPath,
+    visitedLogPath: null,
+    summary,
+    manifest,
+  };
+  throwIfEntryFailed(records, result);
   return result;
 }

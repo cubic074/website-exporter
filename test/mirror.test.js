@@ -249,6 +249,63 @@ test("excluded URLs are not visited directly or through redirects", async (t) =>
   assert.match(html, /src="\.\/avatar\/public\.png"/);
 });
 
+test("log-only mode writes every requested URL and no mirror files", async (t) => {
+  const server = http.createServer((request, response) => {
+    if (request.url === "/") {
+      response
+        .writeHead(200, { "content-type": "text/html" })
+        .end(
+          `<a href="/page">Page</a><a href="/excluded">Excluded</a><img src="/asset.png">`,
+        );
+      return;
+    }
+    if (request.url === "/page") {
+      response
+        .writeHead(200, { "content-type": "text/html" })
+        .end(`<script src="/redirect.js"></script>`);
+      return;
+    }
+    if (request.url === "/redirect.js") {
+      response.writeHead(302, { location: "/final.js" }).end();
+      return;
+    }
+    response
+      .writeHead(200, { "content-type": "application/octet-stream" })
+      .end("content");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const entryUrl = `http://127.0.0.1:${port}/`;
+  const output = await fs.mkdtemp(path.join(os.tmpdir(), "site-mirror-"));
+  t.after(() => fs.rm(output, { recursive: true, force: true }));
+
+  const result = await mirrorSite(entryUrl, {
+    output,
+    allowPrivate: true,
+    concurrency: 1,
+    excludeUrls: ["/excluded"],
+    logOnly: true,
+  });
+
+  assert.equal(result.manifest, null);
+  assert.equal(result.manifestPath, null);
+  assert.deepEqual(await fs.readdir(result.rootDir), ["visited-urls.log"]);
+  const visitedUrls = new Set(
+    (await fs.readFile(result.visitedLogPath, "utf8"))
+      .trim()
+      .split("\n"),
+  );
+  assert.deepEqual(visitedUrls, new Set([
+    entryUrl,
+    `${entryUrl}page`,
+    `${entryUrl}asset.png`,
+    `${entryUrl}redirect.js`,
+    `${entryUrl}final.js`,
+  ]));
+  assert.equal(visitedUrls.has(`${entryUrl}excluded`), false);
+});
+
 test("refreshing one previously deduplicated file does not mutate stale hard links", async (t) => {
   let secondRun = false;
   const server = http.createServer((request, response) => {
