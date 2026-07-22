@@ -87,12 +87,19 @@ function createRequestHeaders(customHeaders) {
   return headers;
 }
 
-function normalizeExcludedUrls(values, crawlOrigin) {
-  if (values === undefined || values === null) return new Set();
+function compileExclusionPatterns(values, crawlOrigin) {
+  if (values === undefined || values === null) return [];
   const list = Array.isArray(values) ? values : [values];
-  return new Set(
-    list.map((value) => normalizeUrl(new URL(value, `${crawlOrigin}/`))),
-  );
+  return list.map((value) => {
+    const url = new URL(value, `${crawlOrigin}/`);
+    url.hash = "";
+    const pattern = url.href;
+    const expression = pattern
+      .split("*")
+      .map((part) => part.replace(/[\\^$+?.()|[\]{}]/g, "\\$&"))
+      .join(".*");
+    return { pattern, regex: new RegExp(`^${expression}$`) };
+  });
 }
 
 async function fetchWithSafeRedirects(url, options) {
@@ -189,10 +196,14 @@ export async function mirrorSite(entryUrls, options = {}) {
   };
   const crawlOrigin = entries[0].origin;
   const entryUrlSet = new Set(entries.map((entry) => entry.href));
-  const excludedUrlSet = normalizeExcludedUrls(
+  const exclusionPatterns = compileExclusionPatterns(
     options.excludeUrls,
     crawlOrigin,
   );
+  const isExcluded = (candidate) => {
+    const normalized = normalizeUrl(candidate);
+    return exclusionPatterns.some(({ regex }) => regex.test(normalized));
+  };
   const headers = createRequestHeaders(options.headers);
   const rootDir = path.join(output, hostDirectory(entries[0]));
   const manifestPath = path.join(rootDir, MANIFEST_FILENAME);
@@ -257,7 +268,7 @@ export async function mirrorSite(entryUrls, options = {}) {
       return null;
     }
 
-    if (excludedUrlSet.has(normalized)) return exclude(normalized);
+    if (isExcluded(normalized)) return exclude(normalized);
 
     const existing = recordsByUrl.get(normalized);
     if (existing) {
@@ -299,7 +310,7 @@ export async function mirrorSite(entryUrls, options = {}) {
       return null;
     }
     const parsed = new URL(normalized);
-    if (parsed.origin === crawlOrigin && excludedUrlSet.has(normalized)) {
+    if (parsed.origin === crawlOrigin && isExcluded(normalized)) {
       return exclude(normalized);
     }
     if (
@@ -322,7 +333,7 @@ export async function mirrorSite(entryUrls, options = {}) {
         allowPrivate,
         crawlOrigin,
         headers,
-        isExcluded: (candidate) => excludedUrlSet.has(normalizeUrl(candidate)),
+        isExcluded,
       });
       record.finalUrl = normalizeUrl(finalUrl);
       record.httpStatus = response.status;
@@ -544,6 +555,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     origin: crawlOrigin,
     createdAt: new Date().toISOString(),
     summary,
+    excludePatterns: exclusionPatterns.map(({ pattern }) => pattern),
     externalUrls: [...externalUrls],
     excludedUrls: [...excludedUrls],
     ignoredNavigationUrls: [...ignoredNavigationUrls],

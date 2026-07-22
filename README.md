@@ -24,16 +24,18 @@ npm.cmd install
 ## Usage
 
 ```sh
-node src/cli.js https://example.com/ https://example.com/about
+node src/cli.js --base-url https://example.com --include / --include /about
 ```
 
 Options:
 
 ```text
+--base-url <url>     Base URL used to resolve includes and exclusions
+--include <path>     Entry URL or path; may be repeated
 --output <path>       Output parent directory (default: mirror)
 --concurrency <n>     Simultaneous downloads, 1-100 (default: 8)
 --header <name:value> Add a request header; may be repeated
---exclude <url>       Do not visit this exact URL; may be repeated
+--exclude <pattern>   Do not visit matching URLs; `*` is a wildcard; repeatable
 --allow-private       Permit localhost and private-network targets
 --help                Show CLI help
 ```
@@ -41,15 +43,58 @@ Options:
 Example:
 
 ```sh
-node ./src/cli.js https://drawaria.online/ https://drawaria.online/test https://drawaria.online/modpanel https://drawaria.online/login https://drawaria.online/event https://drawaria.online/links https://drawaria.online/terms https://drawaria.online/rules https://drawaria.online/room/1 https://drawaria.online/stencils https://drawaria.online/auth/vk https://drawaria.online/privacy https://drawaria.online/gallery https://drawaria.online/palettes https://drawaria.online/auth/google https://drawaria.online/auth/reddit https://drawaria.online/gallery/hot https://drawaria.online/gallery/new https://drawaria.online/gallery/top https://drawaria.online/scoreboards/ https://drawaria.online/auth/discord https://drawaria.online/gallery/img/ https://drawaria.online/auth/facebook https://drawaria.online/gallery/picks https://drawaria.online/avatar/builder https://drawaria.online/scoreboards/mostwins https://drawaria.online/scoreboards/mostscore https://drawaria.online/scoreboards/moststars https://drawaria.online/scoreboards/mostscore/day https://drawaria.online/scoreboards/mostscore/year https://drawaria.online/scoreboards/mostscore/month https://drawaria.online/scoreboards/mostscore/alltime https://drawaria.online/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 --exclude https://drawaria.online/clearsessions https://drawaria.online/logout --output ./mirror --concurrency 12 --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
+node ./src/cli.js --base-url https://drawaria.online \
+  --include / \
+  --include /test \
+  --include /modpanel \
+  --include /login \
+  --include /event \
+  --include /links \
+  --include /terms \
+  --include /rules \
+  --include /room/1 \
+  --include /stencils \
+  --include /privacy \
+  --include /gallery \
+  --include /palettes \
+  --include /gallery/hot \
+  --include /gallery/new \
+  --include /gallery/top \
+  --include /scoreboards/ \
+  --include /gallery/img/ \
+  --include /gallery/picks \
+  --include /avatar/builder \
+  --include /scoreboards/mostwins \
+  --include /scoreboards/mostscore \
+  --include /scoreboards/moststars \
+  --include /scoreboards/mostscore/day \
+  --include /scoreboards/mostscore/year \
+  --include /scoreboards/mostscore/month \
+  --include /scoreboards/mostscore/alltime \
+  --include "/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
+  --include "/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
+  --include "/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
+  --include "/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69" \
+  --exclude /clearsessions \
+  --exclude /logout \
+  --exclude "/avatar/cache/*" \
+  --output ./mirror \
+  --concurrency 12 \
+  --header "Cookie: sid1=your-session-cookie"
 ```
 
 All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
 
-Use `--exclude` more than once to prevent specific URLs from being requested. Absolute and root-relative URLs are accepted, fragments are ignored, and query strings are matched exactly:
+`--base-url` removes the need to repeat the origin. Each `--include` is an entry point and can be absolute or relative to that base. The original positional URL syntax remains supported.
+
+Use `--exclude` more than once to prevent matching URLs from being requested. Exclusions can be absolute or relative to the base URL. `*` matches any number of characters; without a wildcard, matching remains exact. Quote patterns so the shell passes them unchanged:
 
 ```sh
-node src/cli.js https://example.com/ --exclude /logout --exclude "https://example.com/api/delete?id=1"
+node src/cli.js --base-url https://example.com \
+  --include / \
+  --include /about \
+  --exclude "/avatar/cache/*" \
+  --exclude "/logout"
 ```
 
 The default layout is:
@@ -87,7 +132,7 @@ import { mirrorSite } from "./src/mirror.js";
 
 await mirrorSite(["https://example.com/", "https://example.com/account"], {
   output: "./mirror",
-  excludeUrls: ["/logout", "https://example.com/api/delete?id=1"],
+  excludeUrls: ["/logout", "/avatar/cache/*"],
   headers: {
     Cookie: "session=your-session-cookie",
   },
@@ -102,7 +147,7 @@ URLs are normalized and queued once per run. An explicitly listed query-bearing 
 
 Every downloaded response and final output receives a SHA-256 fingerprint in `mirror-manifest.json`. Other distinct URLs with byte-identical final output may share storage through hard links. `duplicateOf` identifies the first resource. A normal file is written as a portable fallback when hard links are unavailable. `sourceDuplicateOf` also records identical response bodies whose rewritten outputs differ.
 
-The manifest lists skipped external URLs under `externalUrls` and matched exclusions under `excludedUrls`; request headers and their values are never written to it.
+The manifest stores normalized configured patterns under `excludePatterns`, skipped external URLs under `externalUrls`, and URLs that actually matched an exclusion under `excludedUrls`. Request headers and their values are never written to it.
 
 ## Security behavior
 

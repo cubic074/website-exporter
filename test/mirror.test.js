@@ -190,7 +190,7 @@ test("excluded URLs are not visited directly or through redirects", async (t) =>
       response
         .writeHead(200, { "content-type": "text/html" })
         .end(
-          `<a href="/excluded">Excluded page</a><img src="/excluded.png"><img src="/allowed.png"><script src="/redirect.js"></script>`,
+          `<a href="/excluded">Excluded page</a><img src="/avatar/cache/a.png"><img src="/avatar/public.png"><script src="/redirect.js"></script>`,
         );
       return;
     }
@@ -214,7 +214,7 @@ test("excluded URLs are not visited directly or through redirects", async (t) =>
     allowPrivate: true,
     excludeUrls: [
       "/excluded",
-      `${entryUrl}excluded.png#ignored-fragment`,
+      "/avatar/cache/*",
       "/redirect-target.js",
     ],
   });
@@ -223,15 +223,20 @@ test("excluded URLs are not visited directly or through redirects", async (t) =>
   assert.equal(result.summary.excluded, 3);
   assert.equal(result.summary.failed, 0);
   assert.equal(hits.get("/excluded"), undefined);
-  assert.equal(hits.get("/excluded.png"), undefined);
+  assert.equal(hits.get("/avatar/cache/a.png"), undefined);
   assert.equal(hits.get("/redirect.js"), 1);
   assert.equal(hits.get("/redirect-target.js"), undefined);
-  assert.equal(hits.get("/allowed.png"), 1);
+  assert.equal(hits.get("/avatar/public.png"), 1);
   assert.deepEqual(new Set(result.manifest.excludedUrls), new Set([
     `${entryUrl}excluded`,
-    `${entryUrl}excluded.png`,
+    `${entryUrl}avatar/cache/a.png`,
     `${entryUrl}redirect-target.js`,
   ]));
+  assert.deepEqual(result.manifest.excludePatterns, [
+    `${entryUrl}excluded`,
+    `${entryUrl}avatar/cache/*`,
+    `${entryUrl}redirect-target.js`,
+  ]);
 
   const redirected = result.manifest.resources.find((item) =>
     item.originalUrl.endsWith("/redirect.js"),
@@ -240,8 +245,8 @@ test("excluded URLs are not visited directly or through redirects", async (t) =>
   const entry = result.manifest.resources.find((item) => item.isEntry);
   const html = await fs.readFile(path.join(result.rootDir, entry.localPath), "utf8");
   assert.ok(html.includes(`href="${entryUrl}excluded"`));
-  assert.ok(html.includes(`src="${entryUrl}excluded.png"`));
-  assert.match(html, /src="\.\/allowed\.png"/);
+  assert.ok(html.includes(`src="${entryUrl}avatar/cache/a.png"`));
+  assert.match(html, /src="\.\/avatar\/public\.png"/);
 });
 
 test("refreshing one previously deduplicated file does not mutate stale hard links", async (t) => {

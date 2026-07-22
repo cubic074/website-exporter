@@ -6,13 +6,16 @@ import { pathToFileURL } from "node:url";
 import { mirrorSite } from "./mirror.js";
 
 function usage() {
-  return `Usage: node src/cli.js <url> [url...] [options]
+  return `Usage: node src/cli.js --base-url <url> --include <path> [--include <path>...] [options]
+       node src/cli.js <url> [url...] [options]
 
 Options:
+  --base-url <url>     Base URL used to resolve --include and --exclude values
+  --include <path>     Entry URL or path; may be repeated
   --output <path>       Output parent directory (default: mirror)
   --concurrency <n>     Maximum simultaneous downloads (default: 8)
   --header <name:value> Add a request header; may be repeated
-  --exclude <url>       Do not visit this URL; may be repeated
+  --exclude <pattern>   Do not visit matching URLs; * is a wildcard; repeatable
   --allow-private       Allow loopback and private-network targets
   --help                Show this help
 `;
@@ -27,6 +30,8 @@ export function parseArgs(argv) {
     excludeUrls: [],
   };
   const entryUrls = [];
+  const includeUrls = [];
+  let baseUrl = null;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -35,6 +40,21 @@ export function parseArgs(argv) {
     }
     if (arg === "--allow-private") {
       options.allowPrivate = true;
+      continue;
+    }
+    if (arg === "--base-url") {
+      const value = argv[++i];
+      if (!value) throw new Error("--base-url requires a URL");
+      baseUrl = value;
+      continue;
+    }
+    if (arg === "--include") {
+      const value = argv[++i];
+      if (!value) throw new Error("--include requires a URL or path");
+      if (value.includes("*")) {
+        throw new Error("--include does not support wildcard patterns");
+      }
+      includeUrls.push(value);
       continue;
     }
     if (arg === "--output") {
@@ -57,7 +77,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--exclude") {
       const value = argv[++i];
-      if (!value) throw new Error("--exclude requires a URL");
+      if (!value) throw new Error("--exclude requires a URL pattern");
       options.excludeUrls.push(value);
       continue;
     }
@@ -73,9 +93,34 @@ export function parseArgs(argv) {
     entryUrls.push(arg);
   }
 
-  if (entryUrls.length === 0)
-    throw new Error("At least one entry URL is required");
-  const parsedEntries = entryUrls.map((entryUrl) => new URL(entryUrl));
+  let parsedEntries;
+  if (baseUrl !== null || includeUrls.length > 0) {
+    if (!baseUrl) throw new Error("--include requires --base-url");
+    if (entryUrls.length > 0) {
+      throw new Error(
+        "Positional entry URLs cannot be combined with --base-url/--include",
+      );
+    }
+    if (includeUrls.length === 0) {
+      throw new Error("At least one --include value is required");
+    }
+    const parsedBaseUrl = new URL(baseUrl);
+    if (!["http:", "https:"].includes(parsedBaseUrl.protocol)) {
+      throw new Error("Base URL must use http:// or https://");
+    }
+    parsedEntries = includeUrls.map(
+      (includeUrl) => new URL(includeUrl, parsedBaseUrl),
+    );
+    options.excludeUrls = options.excludeUrls.map((pattern) => {
+      const resolved = new URL(pattern, parsedBaseUrl);
+      resolved.hash = "";
+      return resolved.href;
+    });
+  } else {
+    if (entryUrls.length === 0)
+      throw new Error("At least one entry URL is required");
+    parsedEntries = entryUrls.map((entryUrl) => new URL(entryUrl));
+  }
   for (const parsed of parsedEntries) {
     if (!["http:", "https:"].includes(parsed.protocol)) {
       throw new Error("Entry URLs must use http:// or https://");
