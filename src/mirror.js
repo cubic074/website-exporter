@@ -14,6 +14,13 @@ const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 const MAX_REDIRECTS = 10;
 const MANIFEST_FILENAME = "mirror-manifest.json";
 
+class ExcludedUrlError extends Error {
+  constructor(url) {
+    super(`Excluded URL not visited: ${url}`);
+    this.excludedUrl = url;
+  }
+}
+
 function contentKind(contentType, url) {
   const mime = contentType.split(";")[0].trim().toLowerCase();
   if (mime === "text/html" || mime === "application/xhtml+xml") return "html";
@@ -80,11 +87,22 @@ function createRequestHeaders(customHeaders) {
   return headers;
 }
 
+function normalizeExcludedUrls(values, crawlOrigin) {
+  if (values === undefined || values === null) return new Set();
+  const list = Array.isArray(values) ? values : [values];
+  return new Set(
+    list.map((value) => normalizeUrl(new URL(value, `${crawlOrigin}/`))),
+  );
+}
+
 async function fetchWithSafeRedirects(url, options) {
   let current = new URL(url);
   for (let redirects = 0; redirects <= MAX_REDIRECTS; redirects += 1) {
     if (current.origin !== options.crawlOrigin) {
       throw new Error(`External redirect not followed: ${current.href}`);
+    }
+    if (options.isExcluded(current.href)) {
+      throw new ExcludedUrlError(normalizeUrl(current));
     }
     await assertSafeUrl(current, options.allowPrivate);
     const response = await fetch(current, {
@@ -171,6 +189,10 @@ export async function mirrorSite(entryUrls, options = {}) {
   };
   const crawlOrigin = entries[0].origin;
   const entryUrlSet = new Set(entries.map((entry) => entry.href));
+  const excludedUrlSet = normalizeExcludedUrls(
+    options.excludeUrls,
+    crawlOrigin,
+  );
   const headers = createRequestHeaders(options.headers);
   const rootDir = path.join(output, hostDirectory(entries[0]));
   const manifestPath = path.join(rootDir, MANIFEST_FILENAME);
@@ -178,6 +200,7 @@ export async function mirrorSite(entryUrls, options = {}) {
   const records = [];
   const recordsByUrl = new Map();
   const externalUrls = new Set();
+  const excludedUrls = new Set();
   const ignoredNavigationUrls = new Set();
   const claimedPaths = new Set([MANIFEST_FILENAME.toLowerCase()]);
   const sourceContentOwners = new Map();
@@ -186,6 +209,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     skipped: 0,
     deduplicated: 0,
     external: 0,
+    excluded: 0,
     ignoredNavigation: 0,
     failed: 0,
   };
@@ -212,6 +236,13 @@ export async function mirrorSite(entryUrls, options = {}) {
     return candidate;
   }
 
+  function exclude(normalized) {
+    excludedUrls.add(normalized);
+    summary.excluded = excludedUrls.size;
+    log(`[EXCLUDED] ${normalized}`);
+    return null;
+  }
+
   function enqueue(url, parentUrl = null, isEntry = false) {
     let normalized;
     try {
@@ -225,6 +256,8 @@ export async function mirrorSite(entryUrls, options = {}) {
       summary.external = externalUrls.size;
       return null;
     }
+
+    if (excludedUrlSet.has(normalized)) return exclude(normalized);
 
     const existing = recordsByUrl.get(normalized);
     if (existing) {
@@ -266,6 +299,9 @@ export async function mirrorSite(entryUrls, options = {}) {
       return null;
     }
     const parsed = new URL(normalized);
+    if (parsed.origin === crawlOrigin && excludedUrlSet.has(normalized)) {
+      return exclude(normalized);
+    }
     if (
       parsed.origin === crawlOrigin &&
       parsed.search &&
@@ -286,6 +322,7 @@ export async function mirrorSite(entryUrls, options = {}) {
         allowPrivate,
         crawlOrigin,
         headers,
+        isExcluded: (candidate) => excludedUrlSet.has(normalizeUrl(candidate)),
       });
       record.finalUrl = normalizeUrl(finalUrl);
       record.httpStatus = response.status;
@@ -334,6 +371,13 @@ export async function mirrorSite(entryUrls, options = {}) {
       summary.downloaded += 1;
       log(`[${response.status}] ${url}`);
     } catch (error) {
+      if (error instanceof ExcludedUrlError) {
+        exclude(error.excludedUrl);
+        record.status = "excluded";
+        record.finalUrl = error.excludedUrl;
+        log(`[EXCLUDED REDIRECT] ${url} -> ${error.excludedUrl}`);
+        return;
+      }
       record.status = "failed";
       record.error = error.message;
       summary.failed += 1;
@@ -501,6 +545,7 @@ export async function mirrorSite(entryUrls, options = {}) {
     createdAt: new Date().toISOString(),
     summary,
     externalUrls: [...externalUrls],
+    excludedUrls: [...excludedUrls],
     ignoredNavigationUrls: [...ignoredNavigationUrls],
     resources: records.map(publicRecord),
   };

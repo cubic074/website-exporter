@@ -182,6 +182,68 @@ test("cross-origin redirects are not followed and cannot receive custom headers"
   assert.match(redirected.error, /External redirect not followed/);
 });
 
+test("excluded URLs are not visited directly or through redirects", async (t) => {
+  const hits = new Map();
+  const server = http.createServer((request, response) => {
+    hits.set(request.url, (hits.get(request.url) || 0) + 1);
+    if (request.url === "/") {
+      response
+        .writeHead(200, { "content-type": "text/html" })
+        .end(
+          `<a href="/excluded">Excluded page</a><img src="/excluded.png"><img src="/allowed.png"><script src="/redirect.js"></script>`,
+        );
+      return;
+    }
+    if (request.url === "/redirect.js") {
+      response.writeHead(302, { location: "/redirect-target.js" }).end();
+      return;
+    }
+    response
+      .writeHead(200, { "content-type": "application/octet-stream" })
+      .end("allowed");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const { port } = server.address();
+  const entryUrl = `http://127.0.0.1:${port}/`;
+  const output = await fs.mkdtemp(path.join(os.tmpdir(), "site-mirror-"));
+  t.after(() => fs.rm(output, { recursive: true, force: true }));
+
+  const result = await mirrorSite(entryUrl, {
+    output,
+    allowPrivate: true,
+    excludeUrls: [
+      "/excluded",
+      `${entryUrl}excluded.png#ignored-fragment`,
+      "/redirect-target.js",
+    ],
+  });
+
+  assert.equal(result.summary.downloaded, 2);
+  assert.equal(result.summary.excluded, 3);
+  assert.equal(result.summary.failed, 0);
+  assert.equal(hits.get("/excluded"), undefined);
+  assert.equal(hits.get("/excluded.png"), undefined);
+  assert.equal(hits.get("/redirect.js"), 1);
+  assert.equal(hits.get("/redirect-target.js"), undefined);
+  assert.equal(hits.get("/allowed.png"), 1);
+  assert.deepEqual(new Set(result.manifest.excludedUrls), new Set([
+    `${entryUrl}excluded`,
+    `${entryUrl}excluded.png`,
+    `${entryUrl}redirect-target.js`,
+  ]));
+
+  const redirected = result.manifest.resources.find((item) =>
+    item.originalUrl.endsWith("/redirect.js"),
+  );
+  assert.equal(redirected.status, "excluded");
+  const entry = result.manifest.resources.find((item) => item.isEntry);
+  const html = await fs.readFile(path.join(result.rootDir, entry.localPath), "utf8");
+  assert.ok(html.includes(`href="${entryUrl}excluded"`));
+  assert.ok(html.includes(`src="${entryUrl}excluded.png"`));
+  assert.match(html, /src="\.\/allowed\.png"/);
+});
+
 test("refreshing one previously deduplicated file does not mutate stale hard links", async (t) => {
   let secondRun = false;
   const server = http.createServer((request, response) => {

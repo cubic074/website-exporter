@@ -33,6 +33,7 @@ Options:
 --output <path>       Output parent directory (default: mirror)
 --concurrency <n>     Simultaneous downloads, 1-100 (default: 8)
 --header <name:value> Add a request header; may be repeated
+--exclude <url>       Do not visit this exact URL; may be repeated
 --allow-private       Permit localhost and private-network targets
 --help                Show CLI help
 ```
@@ -40,10 +41,16 @@ Options:
 Example:
 
 ```sh
-node src/cli.js https://drawaria.online/ https://drawaria.online/test https://drawaria.online/login https://drawaria.online/event https://drawaria.online/links https://drawaria.online/terms https://drawaria.online/rules https://drawaria.online/room/ https://drawaria.online/stencil https://drawaria.online/auth/vk https://drawaria.online/privacy https://drawaria.online/gallery https://drawaria.online/palettes https://drawaria.online/auth/google https://drawaria.online/auth/reddit https://drawaria.online/gallery/hot https://drawaria.online/gallery/new https://drawaria.online/gallery/top https://drawaria.online/scoreboards/ https://drawaria.online/auth/discord https://drawaria.online/gallery/img/ https://drawaria.online/auth/facebook https://drawaria.online/gallery/picks https://drawaria.online/avatar/builder https://drawaria.online/scoreboards/mostwins https://drawaria.online/scoreboards/mostscore https://drawaria.online/scoreboards/moststars https://drawaria.online/scoreboards/mostscore/day https://drawaria.online/scoreboards/mostscore/year https://drawaria.online/scoreboards/mostscore/month https://drawaria.online/scoreboards/mostscore/alltime https://drawaria.online/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 --output ./mirror --concurrency 12 --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
+node ./src/cli.js https://drawaria.online/ https://drawaria.online/test https://drawaria.online/modpanel https://drawaria.online/login https://drawaria.online/event https://drawaria.online/links https://drawaria.online/terms https://drawaria.online/rules https://drawaria.online/room/1 https://drawaria.online/stencils https://drawaria.online/auth/vk https://drawaria.online/privacy https://drawaria.online/gallery https://drawaria.online/palettes https://drawaria.online/auth/google https://drawaria.online/auth/reddit https://drawaria.online/gallery/hot https://drawaria.online/gallery/new https://drawaria.online/gallery/top https://drawaria.online/scoreboards/ https://drawaria.online/auth/discord https://drawaria.online/gallery/img/ https://drawaria.online/auth/facebook https://drawaria.online/gallery/picks https://drawaria.online/avatar/builder https://drawaria.online/scoreboards/mostwins https://drawaria.online/scoreboards/mostscore https://drawaria.online/scoreboards/moststars https://drawaria.online/scoreboards/mostscore/day https://drawaria.online/scoreboards/mostscore/year https://drawaria.online/scoreboards/mostscore/month https://drawaria.online/scoreboards/mostscore/alltime https://drawaria.online/gallery/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/profile/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/friends/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 https://drawaria.online/palettes/?uid=c998b5a0-a8da-11ef-acaf-250da20bac69 --exclude https://drawaria.online/clearsessions https://drawaria.online/logout --output ./mirror --concurrency 12 --header "Cookie: sid1=s:tfvUT0lSJe10S13iCpyZ-c7f4okjliYm.WcKAk+THu+q1WC7LzUZxAlaPMtOamJGGuOJgJl4Ptvw"
 ```
 
 All entry points must have the same origin: scheme, hostname, and port. Headers are sent only to that origin. Redirects to another origin are not followed, which prevents cookies and authorization headers from leaking to an external redirect target.
+
+Use `--exclude` more than once to prevent specific URLs from being requested. Absolute and root-relative URLs are accepted, fragments are ignored, and query strings are matched exactly:
+
+```sh
+node src/cli.js https://example.com/ --exclude /logout --exclude "https://example.com/api/delete?id=1"
+```
 
 The default layout is:
 
@@ -80,6 +87,7 @@ import { mirrorSite } from "./src/mirror.js";
 
 await mirrorSite(["https://example.com/", "https://example.com/account"], {
   output: "./mirror",
+  excludeUrls: ["/logout", "https://example.com/api/delete?id=1"],
   headers: {
     Cookie: "session=your-session-cookie",
   },
@@ -94,7 +102,7 @@ URLs are normalized and queued once per run. An explicitly listed query-bearing 
 
 Every downloaded response and final output receives a SHA-256 fingerprint in `mirror-manifest.json`. Other distinct URLs with byte-identical final output may share storage through hard links. `duplicateOf` identifies the first resource. A normal file is written as a portable fallback when hard links are unavailable. `sourceDuplicateOf` also records identical response bodies whose rewritten outputs differ.
 
-The manifest lists skipped external URLs under `externalUrls`; request headers and their values are never written to it.
+The manifest lists skipped external URLs under `externalUrls` and matched exclusions under `excludedUrls`; request headers and their values are never written to it.
 
 ## Security behavior
 

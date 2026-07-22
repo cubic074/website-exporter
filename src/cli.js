@@ -12,6 +12,7 @@ Options:
   --output <path>       Output parent directory (default: mirror)
   --concurrency <n>     Maximum simultaneous downloads (default: 8)
   --header <name:value> Add a request header; may be repeated
+  --exclude <url>       Do not visit this URL; may be repeated
   --allow-private       Allow loopback and private-network targets
   --help                Show this help
 `;
@@ -23,6 +24,7 @@ export function parseArgs(argv) {
     concurrency: 8,
     allowPrivate: false,
     headers: [],
+    excludeUrls: [],
   };
   const entryUrls = [];
 
@@ -51,6 +53,12 @@ export function parseArgs(argv) {
         throw new Error(`Invalid header name: ${name}`);
       }
       options.headers.push([name, headerValue]);
+      continue;
+    }
+    if (arg === "--exclude") {
+      const value = argv[++i];
+      if (!value) throw new Error("--exclude requires a URL");
+      options.excludeUrls.push(value);
       continue;
     }
     if (arg === "--concurrency") {
@@ -101,6 +109,7 @@ async function main() {
         `${result.summary.skipped} URL duplicates skipped, ` +
         `${result.summary.deduplicated} content duplicates, ` +
         `${result.summary.external} external ignored, ` +
+        `${result.summary.excluded} excluded, ` +
         `${result.summary.ignoredNavigation} query links ignored, ` +
         `${result.summary.failed} failed\n` +
         `Mirror: ${result.rootDir}\n` +
